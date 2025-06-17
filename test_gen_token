@@ -1,0 +1,106 @@
+import os
+import uuid
+import jwt
+import yaml
+import pathlib
+from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+from auth.file_auth import authenticate_file
+from auth.ldap_auth import authenticate_ldap, LDAP_AVAILABLE
+from utils.api_key import get_additional_claims
+
+# Load env
+load_dotenv()
+
+# Configs
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
+REFRESH_TOKEN_EXPIRES = timedelta(days=30)
+AUTH_METHOD = os.getenv("AUTH_METHOD", "file").lower()
+ALWAYS_USE_BASE_CLAIMS = os.getenv("ALWAYS_USE_BASE_CLAIMS", "true").lower() == "true"
+
+# Check LDAP availability
+if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
+    print("Warning: LDAP requested but not available. Falling back to file auth.")
+    AUTH_METHOD = "file"
+
+def get_team_id_from_user(username, user_data):
+    groups = user_data.get("groups", [])
+    if "administrators" in groups or "admins" in groups:
+        return "admin-team"
+    elif "ai-team" in groups:
+        return "ai-team"
+    elif "ml-team" in groups:
+        return "ml-team"
+    return "general-users"
+
+def generate_tokens(username, password, api_key=None, custom_secret=None):
+    if AUTH_METHOD == "ldap":
+        authenticated, user_data = authenticate_ldap(username, password)
+    else:
+        authenticated, user_data = authenticate_file(username, password)
+
+    if not authenticated:
+        print(f"❌ Authentication failed: {user_data.get('error', 'Invalid credentials')}")
+        return
+
+    user_context = {
+        "user_id": username,
+        "email": user_data.get("email", ""),
+        "groups": user_data.get("groups", []),
+        "roles": user_data.get("roles", []),
+        "team_id": get_team_id_from_user(username, user_data)
+    }
+
+    if api_key:
+        user_context["api_key_id"] = api_key
+        claims = get_additional_claims(api_key, user_context)
+    else:
+        claims = get_additional_claims(None, user_context)
+
+    # Merge claims
+    full_claims = {**user_data, **claims}
+    expires_delta = timedelta(hours=full_claims.pop("exp_hours", 1))
+
+    now = datetime.now(timezone.utc)
+    access_payload = {
+        "iat": now,
+        "nbf": now,
+        "jti": str(uuid.uuid4()),
+        "exp": now + expires_delta,
+        "sub": username,
+        "type": "access",
+        "fresh": True,
+        **full_claims
+    }
+    refresh_payload = {
+        "iat": now,
+        "nbf": now,
+        "jti": str(uuid.uuid4()),
+        "exp": now + REFRESH_TOKEN_EXPIRES,
+        "sub": username,
+        "type": "refresh",
+        **full_claims
+    }
+
+    secret_key = custom_secret if custom_secret else JWT_SECRET_KEY
+    token_args = dict(algorithm=JWT_ALGORITHM)
+
+    access_token = jwt.encode(access_payload, secret_key, **token_args)
+    refresh_token = jwt.encode(refresh_payload, secret_key, **token_args)
+
+    print("\n✅ Tokens generated:")
+    print(f"Access Token:\n{access_token}\n")
+    print(f"Refresh Token:\n{refresh_token}\n")
+    if custom_secret:
+        print("Note: Custom secret was used. Ensure it is used during verification as well.")
+
+if __name__ == "__main__":
+    print("JWT Token Generator (CLI)")
+    username = input("Username: ").strip()
+    password = input("Password: ").strip()
+    api_key = input("Optional API Key (Enter to skip): ").strip() or None
+    custom_secret = input("Optional Custom Secret (Enter to skip): ").strip() or None
+
+    generate_tokens(username, password, api_key, custom_secret)
