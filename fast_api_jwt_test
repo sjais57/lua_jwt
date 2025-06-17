@@ -1,0 +1,269 @@
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any
+
+from fastapi import FastAPI, Depends, HTTPException, status, Security
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
+import jwt
+from dotenv import load_dotenv
+
+# Import your existing auth modules
+from auth.file_auth import authenticate_file
+from auth.ldap_auth import authenticate_ldap, LDAP_AVAILABLE
+from utils.api_key import get_additional_claims
+
+# Load environment variables
+load_dotenv()
+
+# Configuration
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 30))
+AUTH_METHOD = os.getenv("AUTH_METHOD", "file").lower()
+ALWAYS_USE_BASE_CLAIMS = os.getenv("ALWAYS_USE_BASE_CLAIMS", "true").lower() == "true"
+
+# Check LDAP availability
+if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
+    print("Warning: LDAP requested but not available. Falling back to file auth.")
+    AUTH_METHOD = "file"
+
+# FastAPI setup
+app = FastAPI(
+    title="JWT Auth Service",
+    description="Authentication service with JWT tokens (without group information)",
+    version="1.0.0"
+)
+
+# Security schemes
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Models
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+class User(BaseModel):
+    username: str
+    email: Optional[str] = None
+    team_id: Optional[str] = None
+    disabled: Optional[bool] = False
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+# Utility functions
+def get_team_id_from_user(username: str, user_data: Dict[str, Any]) -> str:
+    """Determine team ID without exposing groups in the token"""
+    groups = user_data.get("groups", [])
+    if "administrators" in groups or "admins" in groups:
+        return "admin-team"
+    elif "ai-team" in groups:
+        return "ai-team"
+    elif "ml-team" in groups:
+        return "ml-team"
+    return "general-users"
+
+def create_access_token(
+    data: dict,
+    expires_delta: Optional[timedelta] = None,
+    custom_secret: Optional[str] = None
+) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "nbf": datetime.now(timezone.utc)})
+    secret_key = custom_secret if custom_secret else JWT_SECRET_KEY
+    return jwt.encode(to_encode, secret_key, algorithm=JWT_ALGORITHM)
+
+def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    if AUTH_METHOD == "ldap":
+        authenticated, user_data = authenticate_ldap(username, password)
+    else:
+        authenticated, user_data = authenticate_file(username, password)
+
+    if not authenticated:
+        return None
+    
+    # Remove groups and roles from user data
+    user_data.pop("groups", None)
+    user_data.pop("roles", None)
+    return user_data
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except jwt.PyJWTError:
+        raise credentials_exception
+    
+    return User(
+        username=token_data.username,
+        email=payload.get("email"),
+        team_id=payload.get("team_id"),
+        disabled=payload.get("disabled", False)
+    )
+
+async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
+
+# Routes
+@app.post("/token", response_model=Token)
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    api_key: Optional[str] = None,
+    custom_secret: Optional[str] = None
+):
+    user_data = authenticate_user(form_data.username, form_data.password)
+    if not user_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Create user context without groups information
+    user_context = {
+        "user_id": form_data.username,
+        "email": user_data.get("email", ""),
+        "team_id": get_team_id_from_user(form_data.username, user_data)
+    }
+
+    if api_key:
+        user_context["api_key_id"] = api_key
+        claims = get_additional_claims(api_key, user_context)
+    else:
+        claims = get_additional_claims(None, user_context)
+
+    # Merge claims but exclude sensitive user data
+    full_claims = {**user_data, **claims}
+    expires_delta = timedelta(hours=full_claims.pop("exp_hours", ACCESS_TOKEN_EXPIRE_MINUTES / 60))
+
+    access_token = create_access_token(
+        data={
+            "sub": form_data.username,
+            "jti": str(uuid.uuid4()),
+            "type": "access",
+            "fresh": True,
+            **full_claims
+        },
+        expires_delta=expires_delta,
+        custom_secret=custom_secret
+    )
+
+    refresh_token = create_access_token(
+        data={
+            "sub": form_data.username,
+            "jti": str(uuid.uuid4()),
+            "type": "refresh",
+            **full_claims
+        },
+        expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+        custom_secret=custom_secret
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/refresh", response_model=Token)
+async def refresh_token(
+    refresh_request: RefreshTokenRequest,
+    custom_secret: Optional[str] = None
+):
+    try:
+        payload = jwt.decode(
+            refresh_request.refresh_token,
+            custom_secret if custom_secret else JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM]
+        )
+        
+        if payload.get("type") != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type"
+            )
+
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+
+        # Create new tokens with the same claims but new timestamps
+        full_claims = {k: v for k, v in payload.items() if k not in ["iat", "exp", "nbf", "jti", "type"]}
+        
+        access_token = create_access_token(
+            data={
+                "sub": username,
+                "jti": str(uuid.uuid4()),
+                "type": "access",
+                "fresh": False,
+                **full_claims
+            },
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+            custom_secret=custom_secret
+        )
+
+        refresh_token = create_access_token(
+            data={
+                "sub": username,
+                "jti": str(uuid.uuid4()),
+                "type": "refresh",
+                **full_claims
+            },
+            expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
+            custom_secret=custom_secret
+        )
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+@app.get("/users/me", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_active_user)):
+    return current_user
+
+@app.get("/decode")
+async def decode_token(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.PyJWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e)
+        )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
