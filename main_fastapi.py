@@ -9,7 +9,9 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
-
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 from auth.file_auth import authenticate_file
 from auth.ldap_auth import authenticate_ldap, LDAP_AVAILABLE
 from utils.api_key import get_additional_claims
@@ -29,25 +31,15 @@ if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
     AUTH_METHOD = "file"
 
 # FastAPI app
-app = FastAPI(
-    title="JWT Auth API",
-    description="JWT token generation, decoding, and validation.",
-    version="1.0.0",
-    docs_url="/jwt-docs",       # Swagger UI now lives here
-    redoc_url="/redoc",         # ReDoc stays here
-    openapi_url="/openapi.json" # Default OpenAPI schema endpoint
-)
+app = FastAPI(docs_url=None)  # Disable default Swagger UI
 
-@app.get("/", include_in_schema=False)
-def root():
-    return {
-        "message": "Welcome to JWT Auth API",
-        "swagger_ui": "/jwt-docs",
-        "redoc_ui": "/redoc"
-    }
-
-
-
+@app.get("/jwt-docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="JWT Auth API Docs"
+    )
+    
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 class LoginRequest(BaseModel):
