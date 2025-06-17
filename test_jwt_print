@@ -1,0 +1,283 @@
+import os
+import yaml
+import uuid
+import logging
+import getpass
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional, Tuple, Any
+import jwt
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class AuthConfig:
+    """Configuration for authentication system"""
+    def __init__(self):
+        self.jwt_secret_key = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
+        self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
+        self.access_token_expires = timedelta(hours=int(os.getenv("ACCESS_TOKEN_EXPIRES_HOURS", "1")))
+        self.refresh_token_expires = timedelta(days=int(os.getenv("REFRESH_TOKEN_EXPIRES_DAYS", "30")))
+        self.api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+        self.base_api_key_file = "base_api_key.yaml"
+        self.always_use_base_claims = os.getenv("ALWAYS_USE_BASE_CLAIMS", "true").lower() == "true"
+        self.auth_method = os.getenv("AUTH_METHOD", "file")  # file or ldap
+        
+        # Ensure API keys directory exists
+        Path(self.api_keys_dir).mkdir(parents=True, exist_ok=True)
+
+class UserDatabase:
+    """Handles user data storage and retrieval"""
+    def __init__(self):
+        # In production, replace this with your actual user database
+        self.users = {
+            "admin": {
+                "password": "admin123",  # Store hashed passwords in production
+                "email": "admin@example.com",
+                "groups": ["administrators"],
+                "roles": ["admin"],
+                "team_id": "admin-team"
+            },
+            "user": {
+                "password": "password123",
+                "email": "user@example.com",
+                "groups": ["users"],
+                "roles": ["user"],
+                "team_id": "general-users"
+            }
+        }
+    
+    def authenticate(self, username: str, password: str) -> Tuple[bool, Dict]:
+        """Authenticate user with username and password"""
+        user = self.users.get(username)
+        if user and user["password"] == password:
+            return True, {
+                "user_id": username,
+                "email": user["email"],
+                "groups": user["groups"],
+                "roles": user["roles"],
+                "team_id": user["team_id"]
+            }
+        return False, {"error": "Invalid username or password"}
+
+class APIKeyManager:
+    """Manages API key configurations and claims"""
+    def __init__(self, config: AuthConfig):
+        self.config = config
+        self.base_claims = self._load_base_claims()
+    
+    def _load_base_claims(self) -> Dict:
+        """Load claims from base API key file"""
+        base_key_path = Path(self.config.api_keys_dir) / self.config.base_api_key_file
+        if base_key_path.exists():
+            try:
+                with open(base_key_path, 'r') as f:
+                    key_data = yaml.safe_load(f)
+                return key_data.get('claims', {}).get('static', {})
+            except Exception as e:
+                logger.error(f"Error loading base API key: {e}")
+        return {}
+    
+    def get_claims(self, api_key: Optional[str], user_context: Dict) -> Dict:
+        """Get all claims for a given API key and user context"""
+        claims = {}
+        
+        # Include base claims if configured
+        if self.config.always_use_base_claims and self.base_claims:
+            claims.update(self.base_claims)
+        
+        # No API key provided, return base claims only
+        if not api_key:
+            return claims
+        
+        # Load API key specific claims
+        api_key_path = Path(self.config.api_keys_dir) / f"{api_key}.yaml"
+        if not api_key_path.exists():
+            logger.warning(f"API key not found: {api_key}")
+            return claims
+        
+        try:
+            with open(api_key_path, 'r') as f:
+                key_data = yaml.safe_load(f)
+            
+            # Add static claims
+            static_claims = key_data.get('claims', {}).get('static', {})
+            claims.update(static_claims)
+            
+            # Process dynamic claims
+            dynamic_claims = key_data.get('claims', {}).get('dynamic', {})
+            for claim_key, claim_value in dynamic_claims.items():
+                if isinstance(claim_value, str):
+                    if claim_value.startswith("user."):
+                        field = claim_value[5:]
+                        claims[claim_key] = user_context.get(field)
+                    elif claim_value.startswith("env."):
+                        var_name = claim_value[4:]
+                        claims[claim_key] = os.getenv(var_name)
+            
+            return claims
+        
+        except Exception as e:
+            logger.error(f"Error processing API key {api_key}: {e}")
+            return claims
+
+class TokenGenerator:
+    """Handles JWT token generation and validation"""
+    def __init__(self, config: AuthConfig):
+        self.config = config
+    
+    def generate_tokens(self, username: str, user_data: Dict, 
+                      api_key: Optional[str] = None, 
+                      custom_secret: Optional[str] = None) -> Dict:
+        """Generate access and refresh tokens"""
+        # Create user context for claims
+        user_context = {
+            "user_id": username,
+            "email": user_data.get("email", ""),
+            "groups": user_data.get("groups", []),
+            "roles": user_data.get("roles", []),
+            "team_id": user_data.get("team_id", "general-users")
+        }
+        
+        # Get claims from API key manager
+        api_key_manager = APIKeyManager(self.config)
+        api_key_claims = api_key_manager.get_claims(api_key, user_context)
+        
+        # Merge all claims
+        claims = {**user_data, **api_key_claims}
+        
+        # Handle custom expiration if specified in claims
+        expires_delta = self.config.access_token_expires
+        if 'exp_hours' in claims:
+            expires_delta = timedelta(hours=claims['exp_hours'])
+            claims.pop('exp_hours')
+        
+        # Prepare token payloads
+        now = datetime.now(timezone.utc)
+        access_payload = {
+            "iat": now,
+            "nbf": now,
+            "jti": str(uuid.uuid4()),
+            "exp": now + expires_delta,
+            "sub": username,
+            "type": "access",
+            "fresh": True,
+            **claims
+        }
+        
+        refresh_payload = {
+            "iat": now,
+            "nbf": now,
+            "jti": str(uuid.uuid4()),
+            "exp": now + self.config.refresh_token_expires,
+            "sub": username,
+            "type": "refresh",
+            **claims
+        }
+        
+        # Determine which secret to use
+        secret_key = custom_secret if custom_secret else self.config.jwt_secret_key
+        
+        # Generate tokens
+        access_token = jwt.encode(access_payload, secret_key, algorithm=self.config.jwt_algorithm)
+        refresh_token = jwt.encode(refresh_payload, secret_key, algorithm=self.config.jwt_algorithm)
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "access_expires": (now + expires_delta).isoformat(),
+            "refresh_expires": (now + self.config.refresh_token_expires).isoformat(),
+            "note": "Tokens generated with custom secret" if custom_secret else None
+        }
+    
+    def decode_token(self, token: str, custom_secret: Optional[str] = None, 
+                    skip_verification: bool = False) -> Dict:
+        """Decode and validate JWT token"""
+        secret_key = custom_secret if custom_secret else self.config.jwt_secret_key
+        
+        try:
+            if skip_verification:
+                decoded = jwt.decode(token, options={"verify_signature": False})
+                decoded["warning"] = "Token signature verification was skipped!"
+                return decoded
+            
+            decoded = jwt.decode(token, secret_key, algorithms=[self.config.jwt_algorithm])
+            if custom_secret:
+                decoded["note"] = "Decoded using provided custom secret"
+            return decoded
+        except Exception as e:
+            raise ValueError(f"Token decoding failed: {str(e)}")
+
+class JWTGeneratorApp:
+    """Main application class"""
+    def __init__(self):
+        self.config = AuthConfig()
+        self.user_db = UserDatabase()
+        self.token_gen = TokenGenerator(self.config)
+    
+    def run(self):
+        """Main application loop"""
+        print("Production JWT Generator")
+        print("=" * 50)
+        
+        # Get user input
+        username = input("Enter username: ").strip()
+        password = getpass.getpass("Enter password: ").strip()
+        api_key = input("Enter API key (optional): ").strip() or None
+        custom_secret = getpass.getpass("Enter custom secret (optional): ").strip() or None
+        
+        # Authenticate
+        authenticated, user_data = self.user_db.authenticate(username, password)
+        if not authenticated:
+            print(f"\nAuthentication failed: {user_data.get('error', 'Unknown error')}")
+            return
+        
+        # Generate tokens
+        try:
+            tokens = self.token_gen.generate_tokens(username, user_data, api_key, custom_secret)
+            
+            print("\nToken Generation Successful!")
+            print(f"\nAccess Token (expires at {tokens['access_expires']}):")
+            print(tokens["access_token"])
+            
+            print(f"\nRefresh Token (expires at {tokens['refresh_expires']}):")
+            print(tokens["refresh_token"])
+            
+            if tokens.get("note"):
+                print(f"\nNote: {tokens['note']}")
+            
+            # Decode option
+            if input("\nDecode access token? (y/n): ").lower() == 'y':
+                try:
+                    decoded = self.token_gen.decode_token(
+                        tokens["access_token"], 
+                        custom_secret
+                    )
+                    print("\nDecoded Token:")
+                    for k, v in decoded.items():
+                        print(f"{k}: {v}")
+                except ValueError as e:
+                    print(f"\nDecode error: {e}")
+                    if input("Try unverified decode? (y/n): ").lower() == 'y':
+                        decoded = self.token_gen.decode_token(
+                            tokens["access_token"], 
+                            skip_verification=True
+                        )
+                        print("\nUnverified Decoded Token:")
+                        for k, v in decoded.items():
+                            print(f"{k}: {v}")
+        
+        except Exception as e:
+            print(f"\nError generating tokens: {str(e)}")
+
+if __name__ == "__main__":
+    app = JWTGeneratorApp()
+    app.run()
