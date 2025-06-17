@@ -31,14 +31,22 @@ if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
     AUTH_METHOD = "file"
 
 # FastAPI app
-app = FastAPI(docs_url=None)  # Disable default Swagger UI
+app = FastAPI(
+    title="JWT Auth API",
+    description="API for generating, refreshing, decoding, and validating JWT tokens",
+    version="1.0.0",
+    docs_url="/jwt-docs",       # Swagger UI
+    redoc_url="/redoc",         # ReDoc UI
+    openapi_url="/openapi.json" # OpenAPI spec for Swagger UI
+)
 
-@app.get("/jwt-docs", include_in_schema=False)
-async def custom_swagger_ui_html():
-    return get_swagger_ui_html(
-        openapi_url="/openapi.json",
-        title="JWT Auth API Docs"
-    )
+@app.get("/", include_in_schema=False)
+def root():
+    return {
+        "message": "Welcome to JWT Auth API",
+        "swagger_ui": "/jwt-docs",
+        "redoc_ui": "/redoc"
+    }
     
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
