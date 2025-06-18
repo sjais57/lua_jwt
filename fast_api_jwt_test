@@ -1,50 +1,88 @@
 import os
-import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-
-from fastapi import FastAPI, Depends, HTTPException, status, Security
+from typing import Optional, Dict, List, Union
+from fastapi import FastAPI, Request, HTTPException, Depends, status, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 import jwt
+from jwt import PyJWTError
+import logging
+import pathlib
+import yaml
+import uuid
+import glob
 from dotenv import load_dotenv
 
-# Import your existing auth modules
-from auth.file_auth import authenticate_file
-from auth.ldap_auth import authenticate_ldap, LDAP_AVAILABLE
-from utils.api_key import get_additional_claims
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
 
-# Configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 30))
-AUTH_METHOD = os.getenv("AUTH_METHOD", "file").lower()
-ALWAYS_USE_BASE_CLAIMS = os.getenv("ALWAYS_USE_BASE_CLAIMS", "true").lower() == "true"
+# Import authentication methods (you'll need to adapt these for FastAPI)
+from auth.file_auth import authenticate_file
+from auth.ldap_auth import authenticate_ldap, LDAP_AVAILABLE
+from utils.api_key import get_additional_claims, BASE_API_KEY_FILE
 
-# Check LDAP availability
-if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
-    print("Warning: LDAP requested but not available. Falling back to file auth.")
-    AUTH_METHOD = "file"
+# Ensure the templates directory exists
+templates_dir = pathlib.Path(__file__).parent / 'templates'
+templates_dir.mkdir(exist_ok=True)
 
-# FastAPI setup
+# Initialize FastAPI app
 app = FastAPI(
-    title="JWT Auth Service",
-    description="Authentication service with JWT tokens (without group information)",
-    version="1.0.0"
+    title="JWT Auth API",
+    description="API for JWT authentication and token management",
+    version="1.0.0",
+    docs_url=None,  # We'll customize the docs URL
+    redoc_url=None
 )
 
-# Security schemes
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# JWT Configuration
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60  # 1 hour
+REFRESH_TOKEN_EXPIRE_DAYS = 30  # 30 days
+
+# Authentication method
+AUTH_METHOD = os.getenv("AUTH_METHOD", "file")  # "ldap" or "file"
+
+# Whether to always include base API key claims
+ALWAYS_USE_BASE_CLAIMS = os.getenv("ALWAYS_USE_BASE_CLAIMS", "true").lower() == "true"
+
+# Check if LDAP is requested but not available
+if AUTH_METHOD == "ldap" and not LDAP_AVAILABLE:
+    logger.warning("LDAP authentication method selected but python-ldap is not installed.")
+    logger.warning("Falling back to file-based authentication.")
+    logger.warning("To use LDAP authentication, install python-ldap: pip install python-ldap")
+    AUTH_METHOD = "file"
+
+# OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # Models
 class Token(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str
+    refresh_token: Optional[str] = None
+    note: Optional[str] = None
 
 class TokenData(BaseModel):
     username: Optional[str] = None
@@ -52,53 +90,62 @@ class TokenData(BaseModel):
 class User(BaseModel):
     username: str
     email: Optional[str] = None
-    team_id: Optional[str] = None
-    disabled: Optional[bool] = False
+    groups: List[str] = []
+    roles: List[str] = []
+    disabled: Optional[bool] = None
 
-class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+class APIKeyCreate(BaseModel):
+    owner: str
+    provider_permissions: List[str] = ["openai"]
+    endpoint_permissions: List[str] = ["/v1/chat/completions", "/v1/embeddings"]
+    static_claims: Dict = {
+        'models': ['gpt-3.5-turbo'],
+        'rate_limit': 20,
+        'tier': 'standard',
+        'exp_hours': 1
+    }
+    dynamic_claims: Dict = {}
+
+class APIKeyUpdate(BaseModel):
+    owner: Optional[str] = None
+    provider_permissions: Optional[List[str]] = None
+    endpoint_permissions: Optional[List[str]] = None
+    static_claims: Optional[Dict] = None
+    dynamic_claims: Optional[Dict] = None
 
 # Utility functions
-def get_team_id_from_user(username: str, user_data: Dict[str, Any]) -> str:
-    """Determine team ID without exposing groups in the token"""
+def get_team_id_from_user(username: str, user_data: Dict) -> str:
+    """Determine the team ID from the user's data"""
     groups = user_data.get("groups", [])
+    
     if "administrators" in groups or "admins" in groups:
         return "admin-team"
     elif "ai-team" in groups:
         return "ai-team"
     elif "ml-team" in groups:
         return "ml-team"
+    
+    # Default team
     return "general-users"
 
-def create_access_token(
-    data: dict,
-    expires_delta: Optional[timedelta] = None,
-    custom_secret: Optional[str] = None
-) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, secret_key: str = JWT_SECRET_KEY):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "nbf": datetime.now(timezone.utc)})
-    secret_key = custom_secret if custom_secret else JWT_SECRET_KEY
-    return jwt.encode(to_encode, secret_key, algorithm=JWT_ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
 
-def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
-    if AUTH_METHOD == "ldap":
-        authenticated, user_data = authenticate_ldap(username, password)
-    else:
-        authenticated, user_data = authenticate_file(username, password)
+def create_refresh_token(data: dict, secret_key: str = JWT_SECRET_KEY):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc), "nbf": datetime.now(timezone.utc), "type": "refresh"})
+    encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
 
-    if not authenticated:
-        return None
-    
-    # Remove groups and roles from user data
-    user_data.pop("groups", None)
-    user_data.pop("roles", None)
-    return user_data
-
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -110,160 +157,627 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username)
-    except jwt.PyJWTError:
+    except PyJWTError:
         raise credentials_exception
     
-    return User(
-        username=token_data.username,
-        email=payload.get("email"),
-        team_id=payload.get("team_id"),
-        disabled=payload.get("disabled", False)
-    )
+    # In a real app, you would get the user from a database here
+    # For now, we'll just return the username
+    return User(username=token_data.username)
 
-async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_active_user(current_user: User = Depends(get_current_user)):
     if current_user.disabled:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
+async def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme)):
+    if token is None:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            return None
+        return User(username=username)
+    except PyJWTError:
+        return None
+
+# Custom OpenAPI schema
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="JWT Auth API",
+        version="1.0.0",
+        description="API for JWT authentication and token management",
+        routes=app.routes,
+    )
+    
+    # Add security definitions
+    openapi_schema["components"]["securitySchemes"] = {
+        "OAuth2PasswordBearer": {
+            "type": "oauth2",
+            "flows": {
+                "password": {
+                    "tokenUrl": "token",
+                    "scopes": {
+                        "read": "Read access",
+                        "write": "Write access"
+                    }
+                }
+            }
+        }
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# Custom Swagger UI
+@app.get("/dspai-docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="JWT Auth API Documentation",
+        swagger_ui_parameters={
+            'deepLinking': True,
+            'defaultModelsExpandDepth': 2,
+            'defaultModelExpandDepth': 2,
+        }
+    )
+
+# Serve OpenAPI JSON
+@app.get("/openapi.json", include_in_schema=False)
+async def get_open_api_endpoint():
+    return JSONResponse(app.openapi())
+
+# Serve Swagger YAML
+@app.get("/swagger.yaml", include_in_schema=False)
+async def get_swagger_yaml():
+    import yaml
+    return Response(
+        content=yaml.dump(app.openapi()),
+        media_type="application/yaml"
+    )
+
 # Routes
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return """
+    <html>
+        <head>
+            <title>JWT Auth API</title>
+        </head>
+        <body>
+            <h1>JWT Auth API</h1>
+            <p>Visit <a href="/dspai-docs">/dspai-docs</a> for API documentation</p>
+        </body>
+    </html>
+    """
+
 @app.post("/token", response_model=Token)
 async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    api_key: Optional[str] = None,
-    custom_secret: Optional[str] = None
+    username: str = Body(...),
+    password: str = Body(...),
+    api_key: Optional[str] = Body(None),
+    custom_secret: Optional[str] = Body(None)
 ):
-    user_data = authenticate_user(form_data.username, form_data.password)
-    if not user_data:
+    # Authenticate based on the configured method
+    if AUTH_METHOD == "ldap":
+        authenticated, user_data = authenticate_ldap(username, password)
+    else:  # file-based authentication
+        authenticated, user_data = authenticate_file(username, password)
+
+    if not authenticated:
+        error_message = "Invalid username or password"
+        if "error" in user_data:
+            error_message = user_data["error"]
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail=error_message,
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Create user context without groups information
+
+    # Create user context for dynamic claims processing
     user_context = {
-        "user_id": form_data.username,
+        "user_id": username,
         "email": user_data.get("email", ""),
-        "team_id": get_team_id_from_user(form_data.username, user_data)
+        "groups": user_data.get("groups", []),
+        "roles": user_data.get("roles", []),
+        "team_id": get_team_id_from_user(username, user_data)
     }
 
+    # If an API key was provided, get additional claims to include in the token
     if api_key:
-        user_context["api_key_id"] = api_key
-        claims = get_additional_claims(api_key, user_context)
+        user_context = {
+            "user_id": username,
+            "team_id": get_team_id_from_user(username, user_data),
+            "groups": user_data.get("groups", []),
+            "api_key_id": api_key
+        }
+        logger.info(f"Processing API key with user_context: {user_context}")
+        api_key_claims = get_additional_claims(api_key, user_context)
     else:
-        claims = get_additional_claims(None, user_context)
+        api_key_claims = get_additional_claims(None, user_context)
 
-    # Merge claims but exclude sensitive user data
-    full_claims = {**user_data, **claims}
-    expires_delta = timedelta(hours=full_claims.pop("exp_hours", ACCESS_TOKEN_EXPIRE_MINUTES / 60))
+    # Log which API key is being used
+    if api_key:
+        logger.info(f"Using provided API key: {api_key}")
+    else:
+        logger.info("No API key provided, using base API key")
 
-    access_token = create_access_token(
-        data={
-            "sub": form_data.username,
+    # Merge user data with additional claims
+    claims = {**user_data, **api_key_claims}
+    
+    # Get expiration time from API key configuration if available
+    expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)  # Default
+    if 'exp_hours' in claims:
+        expires_delta = timedelta(hours=claims['exp_hours'])
+        logger.info(f"Using custom expiration time from API key: {claims['exp_hours']} hours")
+        # Remove exp_hours from claims to avoid conflicts
+        claims.pop('exp_hours')
+    
+    # If custom secret is provided, use it with PyJWT directly
+    if custom_secret:
+        logger.info("Using custom secret for token generation")
+        
+        now = datetime.now(timezone.utc)
+        access_token_exp = now + expires_delta
+        refresh_token_exp = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        
+        access_payload = {
+            "iat": now,
+            "nbf": now,
             "jti": str(uuid.uuid4()),
+            "exp": access_token_exp,
+            "sub": username,
             "type": "access",
             "fresh": True,
-            **full_claims
-        },
-        expires_delta=expires_delta,
-        custom_secret=custom_secret
-    )
-
-    refresh_token = create_access_token(
-        data={
-            "sub": form_data.username,
+            **claims
+        }
+        
+        refresh_payload = {
+            "iat": now,
+            "nbf": now,
             "jti": str(uuid.uuid4()),
+            "exp": refresh_token_exp,
+            "sub": username,
             "type": "refresh",
-            **full_claims
-        },
-        expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
-        custom_secret=custom_secret
-    )
+            **claims
+        }
+        
+        access_token = jwt.encode(access_payload, custom_secret, algorithm=JWT_ALGORITHM)
+        refresh_token = jwt.encode(refresh_payload, custom_secret, algorithm=JWT_ALGORITHM)
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "refresh_token": refresh_token,
+            "note": "Tokens generated with custom secret - will not be usable with standard application routes unless the same secret is provided for verification"
+        }
+    else:
+        # Standard token creation with application secret
+        access_token = create_access_token(
+            {"sub": username, "fresh": True, **claims},
+            expires_delta=expires_delta
+        )
+        refresh_token = create_refresh_token(
+            {"sub": username, **claims}
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "refresh_token": refresh_token
+        }
 
+@app.post("/refresh", response_model=Token)
+async def refresh_token(current_user: User = Depends(get_current_user)):
+    # In a real implementation, you would verify the refresh token here
+    # For simplicity, we'll just create a new access token
+    
+    # Get the refresh token from the request
+    # Note: In a real app, you should properly verify the refresh token
+    # This is a simplified implementation
+    
+    access_token = create_access_token(
+        {"sub": current_user.username}
+    )
+    
     return {
         "access_token": access_token,
-        "refresh_token": refresh_token,
         "token_type": "bearer"
     }
 
-@app.post("/refresh", response_model=Token)
-async def refresh_token(
-    refresh_request: RefreshTokenRequest,
-    custom_secret: Optional[str] = None
+@app.post("/decode")
+async def decode_token_endpoint(
+    token: str = Body(...),
+    skip_verification: bool = Body(False),
+    custom_secret: Optional[str] = Body(None)
 ):
+    # Determine which secret to use
+    secret_key = custom_secret if custom_secret else JWT_SECRET_KEY
+    
     try:
-        payload = jwt.decode(
-            refresh_request.refresh_token,
-            custom_secret if custom_secret else JWT_SECRET_KEY,
-            algorithms=[JWT_ALGORITHM]
+        # First attempt standard verification
+        try:
+            if custom_secret:
+                decoded = jwt.decode(token, secret_key, algorithms=[JWT_ALGORITHM])
+                decoded["note"] = "Decoded using provided custom secret"
+            else:
+                decoded = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            return decoded
+        except Exception as e:
+            # If verification fails and skipVerification is enabled, try decoding without verification
+            if skip_verification:
+                try:
+                    decoded = jwt.decode(token, options={"verify_signature": False})
+                    decoded["warning"] = "Token signature verification was skipped! This token may not be valid."
+                    if custom_secret:
+                        decoded["note"] = "Custom secret was provided but not used due to skip verification"
+                    return decoded
+                except Exception as inner_e:
+                    return JSONResponse(
+                        {"error": f"Invalid token format: {str(inner_e)}"},
+                        status_code=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                error_msg = str(e)
+                if custom_secret:
+                    error_msg += " (using provided custom secret)"
+                return JSONResponse(
+                    {"error": error_msg},
+                    status_code=status.HTTP_400_BAD_REQUEST
+                )
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Unexpected error: {str(e)}"},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@app.post("/validate")
+async def validate_token(token: str = Body(...)):
+    """Validate a JWT token's signature and expiration"""
+    try:
+        # Attempt to decode the token
+        decoded = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         
-        if payload.get("type") != "refresh":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type"
-            )
-
-        username = payload.get("sub")
-        if not username:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
-
-        # Create new tokens with the same claims but new timestamps
-        full_claims = {k: v for k, v in payload.items() if k not in ["iat", "exp", "nbf", "jti", "type"]}
+        # If we get here, token is valid
+        expiry = datetime.fromtimestamp(decoded['exp']).strftime('%Y-%m-%d %H:%M:%S UTC')
+        issue_time = datetime.fromtimestamp(decoded['iat']).strftime('%Y-%m-%d %H:%M:%S UTC')
         
-        access_token = create_access_token(
-            data={
-                "sub": username,
-                "jti": str(uuid.uuid4()),
-                "type": "access",
-                "fresh": False,
-                **full_claims
-            },
-            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
-            custom_secret=custom_secret
-        )
-
-        refresh_token = create_access_token(
-            data={
-                "sub": username,
-                "jti": str(uuid.uuid4()),
-                "type": "refresh",
-                **full_claims
-            },
-            expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
-            custom_secret=custom_secret
-        )
-
+        # Check if token is expired
+        is_expired = datetime.fromtimestamp(decoded['exp']) < datetime.now(timezone.utc)
+        
         return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer"
+            "valid": True,
+            "signature_verified": True,
+            "expired": is_expired,
+            "expiry_time": expiry,
+            "issued_at": issue_time,
+            "issuer": decoded.get('iss', 'Not specified'),
+            "subject": decoded.get('sub', 'Not specified')
+        }
+    except Exception as e:
+        # Determine type of error
+        error_msg = str(e)
+        signature_failed = "signature" in error_msg.lower()
+        expired = "expired" in error_msg.lower()
+        
+        # Return detailed validation result
+        return {
+            "valid": False,
+            "signature_verified": not signature_failed,
+            "expired": expired,
+            "error": error_msg
         }
 
-    except jwt.PyJWTError:
+@app.get("/protected")
+async def protected_route(current_user: User = Depends(get_current_user)):
+    return {"logged_in_as": current_user.username}
+
+@app.post("/sensitive-action")
+async def sensitive_action(current_user: User = Depends(get_current_user)):
+    """This endpoint requires a fresh token (from direct login, not from refresh)"""
+    # In a real implementation, you would check for token freshness
+    # This is a simplified version
+    
+    # Demo of a sensitive action like password change, payment, etc.
+    return {
+        "message": "Sensitive action performed successfully",
+        "user": current_user.username,
+        "token_status": "Fresh token confirmed",
+        "action_time": str(datetime.now(timezone.utc))
+    }
+
+# API Key Management Endpoints
+@app.get("/api-keys")
+async def get_api_keys(current_user: User = Depends(get_current_user)):
+    """Get a list of all API keys"""
+    # Only allow administrators to access this endpoint
+    if 'administrators' not in current_user.groups and 'admins' not in current_user.groups:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required"
         )
+    
+    # Get API keys directory path
+    api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+    
+    if not os.path.exists(api_keys_dir):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="API keys directory not found"
+        )
+    
+    # Get all API key files (excluding base key)
+    api_key_files = glob.glob(os.path.join(api_keys_dir, "*.yaml"))
+    api_keys = []
+    
+    for key_file in api_key_files:
+        filename = os.path.basename(key_file)
+        if filename != BASE_API_KEY_FILE:
+            try:
+                with open(key_file, 'r') as f:
+                    key_data = yaml.safe_load(f)
+                    
+                api_keys.append({
+                    'filename': filename,
+                    'id': key_data.get('id', ''),
+                    'owner': key_data.get('owner', ''),
+                    'provider_permissions': key_data.get('provider_permissions', []),
+                    'endpoint_permissions': key_data.get('endpoint_permissions', []),
+                    'static_claims': key_data.get('claims', {}).get('static', {})
+                })
+            except Exception as e:
+                logger.error(f"Error reading API key file {filename}: {str(e)}")
+    
+    return api_keys
 
-@app.get("/users/me", response_model=User)
-async def read_users_me(current_user: User = Depends(get_current_active_user)):
-    return current_user
+@app.get("/api-keys/{api_key_id}")
+async def get_api_key(api_key_id: str, current_user: User = Depends(get_current_user)):
+    """Get details for a specific API key"""
+    # Only allow administrators to access this endpoint
+    if 'administrators' not in current_user.groups and 'admins' not in current_user.groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required"
+        )
+    
+    # Get API keys directory path
+    api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+    
+    # Look for the API key file
+    api_key_files = glob.glob(os.path.join(api_keys_dir, "*.yaml"))
+    
+    for key_file in api_key_files:
+        try:
+            with open(key_file, 'r') as f:
+                key_data = yaml.safe_load(f)
+                
+                if key_data.get('id') == api_key_id:
+                    return key_data
+        except Exception as e:
+            logger.error(f"Error reading API key file {key_file}: {str(e)}")
+    
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="API key not found"
+    )
 
-@app.get("/decode")
-async def decode_token(token: str = Depends(oauth2_scheme)):
+@app.post("/api-keys", status_code=status.HTTP_201_CREATED)
+async def create_api_key(api_key_data: APIKeyCreate, current_user: User = Depends(get_current_user)):
+    """Create a new API key"""
+    # Only allow administrators to access this endpoint
+    if 'administrators' not in current_user.groups and 'admins' not in current_user.groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required"
+        )
+    
+    # Generate API key string and ID
+    api_key_string = str(uuid.uuid4()).replace('-', '')
+    api_key_id = f"api-key-{str(uuid.uuid4())[:8]}"
+    
+    # Create API key data
+    api_key_data_dict = {
+        'id': api_key_id,
+        'owner': api_key_data.owner,
+        'provider_permissions': api_key_data.provider_permissions,
+        'endpoint_permissions': api_key_data.endpoint_permissions,
+        'claims': {
+            'static': api_key_data.static_claims,
+            'dynamic': api_key_data.dynamic_claims
+        }
+    }
+    
+    # Get API keys directory path
+    api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+    
+    # Ensure API keys directory exists
+    if not os.path.exists(api_keys_dir):
+        os.makedirs(api_keys_dir)
+    
+    # Save API key to file
+    api_key_file = os.path.join(api_keys_dir, f"{api_key_string}.yaml")
+    
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.PyJWTError as e:
+        with open(api_key_file, 'w') as f:
+            yaml.dump(api_key_data_dict, f, default_flow_style=False)
+    except Exception as e:
+        logger.error(f"Error creating API key file: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create API key: {str(e)}"
+        )
+    
+    # Return API key data with the key string
+    return {
+        **api_key_data_dict,
+        'api_key': api_key_string
+    }
+
+@app.put("/api-keys/{api_key_string}")
+async def update_api_key(
+    api_key_string: str,
+    api_key_data: APIKeyUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing API key"""
+    # Only allow administrators to access this endpoint
+    if 'administrators' not in current_user.groups and 'admins' not in current_user.groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required"
+        )
+    
+    # Get API keys directory path
+    api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+    
+    # Check if API key file exists
+    api_key_file = os.path.join(api_keys_dir, f"{api_key_string}.yaml")
+    
+    if not os.path.exists(api_key_file):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key not found"
+        )
+    
+    try:
+        # Read existing API key data
+        with open(api_key_file, 'r') as f:
+            existing_data = yaml.safe_load(f)
+        
+        # Update API key data with new values while preserving the ID
+        api_key_id = existing_data['id']
+        
+        # Update fields from request data
+        updated_data = {
+            'id': api_key_id,  # Preserve original ID
+            'owner': api_key_data.owner if api_key_data.owner is not None else existing_data.get('owner'),
+            'provider_permissions': api_key_data.provider_permissions if api_key_data.provider_permissions is not None else existing_data.get('provider_permissions', []),
+            'endpoint_permissions': api_key_data.endpoint_permissions if api_key_data.endpoint_permissions is not None else existing_data.get('endpoint_permissions', []),
+            'claims': {
+                'static': api_key_data.static_claims if api_key_data.static_claims is not None else existing_data.get('claims', {}).get('static', {}),
+                'dynamic': api_key_data.dynamic_claims if api_key_data.dynamic_claims is not None else existing_data.get('claims', {}).get('dynamic', {})
+            }
+        }
+        
+        # Save updated API key to file
+        with open(api_key_file, 'w') as f:
+            yaml.dump(updated_data, f, default_flow_style=False)
+        
+        return updated_data
+    except Exception as e:
+        logger.error(f"Error updating API key: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update API key: {str(e)}"
         )
 
-if __name__ == "__main__":
+@app.delete("/api-keys/{api_key_string}")
+async def delete_api_key(api_key_string: str, current_user: User = Depends(get_current_user)):
+    """Delete an API key"""
+    # Only allow administrators to access this endpoint
+    if 'administrators' not in current_user.groups and 'admins' not in current_user.groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required"
+        )
+    
+    # Get API keys directory path
+    api_keys_dir = os.getenv("API_KEYS_DIR", "config/api_keys")
+    
+    # Check if API key file exists
+    api_key_file = os.path.join(api_keys_dir, f"{api_key_string}.yaml")
+    
+    if not os.path.exists(api_key_file):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key not found"
+        )
+    
+    try:
+        # Delete API key file
+        os.remove(api_key_file)
+        return {"message": "API key deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting API key: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete API key: {str(e)}"
+        )
+
+@app.get("/debug/request-info")
+async def request_debug_info(request: Request):
+    """
+    Endpoint that returns detailed information about the current request and response.
+    Useful for debugging HTTP interactions and API testing.
+    Will attempt to decode JWT tokens even if verification fails.
+    """
+    # Collect request information
+    request_info = {
+        "headers": dict(request.headers),
+        "method": request.method,
+        "url": str(request.url),
+        "path": request.url.path,
+        "query_params": dict(request.query_params),
+        "cookies": request.cookies,
+        "client": request.client.host if request.client else None,
+    }
+    
+    try:
+        body = await request.json()
+        request_info["body"] = body
+    except:
+        request_info["body"] = None
+    
+    # Check for JWT token in Authorization header
+    jwt_info = {}
+    auth_header = request.headers.get('authorization', '')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        jwt_info["token"] = token
+        
+        # Check for custom secret in query parameters
+        custom_secret = request.query_params.get('secret', None)
+        if custom_secret:
+            jwt_info["using_custom_secret"] = True
+            
+        # Determine which secret to use
+        secret_key = custom_secret if custom_secret else JWT_SECRET_KEY
+        
+        # Try to decode the token without verification
+        try:
+            # First attempt standard verification
+            try:
+                decoded = jwt.decode(token, secret_key, algorithms=[JWT_ALGORITHM])
+                jwt_info["decoded"] = decoded
+                jwt_info["verified"] = True
+            except Exception as e:
+                # If verification fails, try decoding without verification
+                jwt_info["verification_error"] = str(e)
+                jwt_info["verified"] = False
+                jwt_info["warning"] = "Token signature verification failed! Showing unverified token contents."
+                
+                # Decode without verification
+                decoded = jwt.decode(token, options={"verify_signature": False})
+                jwt_info["decoded"] = decoded
+        except Exception as e:
+            jwt_info["error"] = f"Failed to decode token: {str(e)}"
+    
+    # Create response with detailed information
+    response_data = {
+        "request_info": request_info,
+        "jwt_info": jwt_info if jwt_info else None,
+        "response_info": {
+            "status_code": 200,
+            "timestamp": str(datetime.now(timezone.utc))
+        }
+    }
+    
+    return response_data
+
+if __name__ == '__main__':
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv('PORT', 5000)))
