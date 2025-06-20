@@ -1,0 +1,39 @@
+{
+  "uri": "/your-api",
+  "plugins": {
+    "jwt-auth": {},
+    "serverless-pre-function": {
+      "phase": "access",
+      "functions": [
+        "local token_cache = ngx.shared.token_cache\n\
+        local token = token_cache:get('access_token')\n\
+        local expires = token_cache:get('expires')\n\
+        if not token or (expires and expires < ngx.now()) then\n\
+          local http = require('resty.http')\n\
+          local httpc = http.new()\n\
+          local res, err = httpc:request_uri('https://OAUTH2_TOKEN_URL', {\n\
+            method = 'POST',\n\
+            body = 'grant_type=client_credentials&client_id=CLIENT_ID&client_secret=CLIENT_SECRET',\n\
+            headers = { ['Content-Type'] = 'application/x-www-form-urlencoded' }\n\
+          })\n\
+          if not res or res.status ~= 200 then\n\
+            ngx.log(ngx.ERR, 'Failed to fetch token: ', err or res.body)\n\
+            return ngx.exit(500)\n\
+          end\n\
+          local body = cjson.decode(res.body)\n\
+          token = body['access_token']\n\
+          local expires_in = body['expires_in'] or 3600\n\
+          token_cache:set('access_token', token, expires_in - 60)\n\
+          token_cache:set('expires', ngx.now() + expires_in - 60, expires_in - 60)\n\
+        end\n\
+        ngx.req.set_header('Authorization', 'Bearer ' .. token)"
+      ]
+    }
+  },
+  "upstream": {
+    "type": "roundrobin",
+    "nodes": {
+      "upstream.api.server:443": 1
+    }
+  }
+}
