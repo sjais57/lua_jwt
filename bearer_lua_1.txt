@@ -1,52 +1,53 @@
-{
-  "uri": "/api/slurm/job/*",
-  "plugins": {
-    "jwt-auth": {},
-    "serverless-pre-function": {
-      "phase": "access",
-      "functions": [
-        "local cjson = require \"cjson.safe\"\nlocal http = require \"resty.http\"\nlocal token_cache = ngx.shared.token_cache\nlocal token = token_cache:get(\"access_token\")\nlocal expires = token_cache:get(\"expires_at\")\nif (not token) or (not expires) or (expires < ngx.now()) then\n  local httpc = http.new()\n  local res, err = httpc:request_uri(\"https://OAUTH2_TOKEN_URL\", {\n    method = \"POST\",\n    body = \"grant_type=client_credentials&client_id=CLIENT_ID&client_secret=CLIENT_SECRET\",\n    headers = { [\"Content-Type\"] = \"application/x-www-form-urlencoded\" }\n  })\n  if not res or res.status ~= 200 then\n    ngx.log(ngx.ERR, \"Failed to fetch token: \", err or (res and res.body))\n    return ngx.exit(500)\n  end\n  local data = cjson.decode(res.body)\n  token = data[\"access_token\"]\n  local expires_in = tonumber(data[\"expires_in\"]) or 3600\n  local expiry = ngx.now() + expires_in - 60\n  token_cache:set(\"access_token\", token, expires_in - 60)\n  token_cache:set(\"expires_at\", expiry, expires_in - 60)\nend\nngx.req.set_header(\"Authorization\", \"Bearer \" .. token)"
-      ]
+curl -X PUT http://127.0.0.1:9180/apisix/admin/routes/1 \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -d '{
+    "uri": "/api/job",
+    "plugins": {
+        "jwt-auth": {},
+        "serverless-pre-function": {
+            "phase": "rewrite",
+            "functions": ["return function(conf, ctx)
+                local http = require(\"resty.http\")
+                local core = require(\"apisix.core\")
+
+                local token_cache_key = \"oauth2_token\"
+                local token, err = core.lrucache.global(token_cache_key, 3600, function()
+                    local httpc = http.new()
+                    local res, err = httpc:request_uri(\"https://keycloak.example.com/auth/realms/your-realm/protocol/openid-connect/token\", {
+                        method = \"POST\",
+                        body = ngx.encode_args({
+                            client_id = \"api-client\",
+                            client_secret = \"your-client-secret\",
+                            grant_type = \"client_credentials\"
+                        }),
+                        headers = {
+                            [\"Content-Type\"] = \"application/x-www-form-urlencoded\"
+                        },
+                        ssl_verify = false
+                    })
+
+                    if not res or res.status ~= 200 then
+                        core.log.error(\"failed to fetch token: \", err or res.body)
+                        return nil
+                    end
+
+                    local body = core.json.decode(res.body)
+                    return body.access_token
+                end)
+
+                if not token then
+                    return 500, { message = \"Failed to get bearer token\" }
+                end
+
+                core.request.set_header(ctx, \"Authorization\", \"Bearer \" .. token)
+            end"]
+        }
     },
-    "proxy-rewrite": {
-      "regex_uri": ["/api/slurm/job/(.*)", "/real-api/$1"],
-      "scheme": "https",
-      "host": "UPSTREAM_HOST"
+    "upstream": {
+        "type": "roundrobin",
+        "nodes": {
+            "test.com:443": 1
+        },
+        "scheme": "https"
     }
-  },
-  "upstream": {
-    "type": "roundrobin",
-    "scheme": "https",
-    "nodes": {
-      "UPSTREAM_HOST:443": 1
-    }
-  }
-}
-
-
-curl -X PUT "http://127.0.0.1:9180/apisix/admin/routes/secure-api" \
-  -H "X-API-KEY: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d @route.json
-
-
-====================
-
-{
-  "uri": "/test",
-  "plugins": {
-    "serverless-pre-function": {
-      "phase": "access",
-      "functions": [
-        "ngx.log(ngx.ERR, \"hello world from serverless-pre-function\")"
-      ]
-    }
-  },
-  "upstream": {
-    "type": "roundrobin",
-    "scheme": "https",
-    "nodes": {
-      "yourupstream.com:443": 1
-    }
-  }
-}
+}'
