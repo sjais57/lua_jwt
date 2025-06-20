@@ -22,3 +22,86 @@
     "scheme": "https"
   }
 }
+
+
+======================================
+
+LUA:
+return function(conf, ctx)
+  local http = require("resty.http")
+  local core = require("apisix.core")
+  local lrucache = core.lrucache
+  local now = ngx.now
+
+  -- Token cache function
+  local function fetch_token()
+    local httpc = http.new()
+    local res, err = httpc:request_uri("https://keycloak.example.com/auth/realms/your-realm/protocol/openid-connect/token", {
+      method = "POST",
+      body = ngx.encode_args({
+        client_id = "api-client",
+        client_secret = "your-client-secret",
+        grant_type = "client_credentials"
+      }),
+      headers = {
+        ["Content-Type"] = "application/x-www-form-urlencoded"
+      },
+      ssl_verify = false
+    })
+    if not res then
+      core.log.error("HTTP request failed: ", err)
+      return nil, "no_response"
+    end
+    if res.status ~= 200 then
+      core.log.error("Invalid response (", res.status, "): ", res.body)
+      return nil, "bad_status"
+    end
+    local body = core.json.decode(res.body)
+    if not body or not body.access_token then
+      core.log.error("Failed to parse access token: ", res.body)
+      return nil, "bad_json"
+    end
+    local expiry = now() + (body.expires_in or 3600) - 60  -- Subtract 60 seconds to be safe
+    return {token = body.access_token, expiry = expiry}, nil
+  end
+
+  -- Global cache
+  local token_cache = lrucache.global("keycloak_token_cache", 10, function() return {} end)
+  local cache = token_cache or {}
+
+  -- Only refresh token if missing or expired
+  if not cache.token or not cache.expiry or cache.expiry <= now() then
+    local t, err = fetch_token()
+    if not t then
+      core.log.error("Failed to fetch token: ", err)
+      return 500, { message = "Failed to get bearer token" }
+    end
+    cache.token = t.token
+    cache.expiry = t.expiry
+    -- Save back to LRU cache (by replacing whole table)
+    lrucache.global("keycloak_token_cache", 10, function() return cache end)
+  end
+
+  core.request.set_header(ctx, "Authorization", "Bearer " .. cache.token)
+end
+
+======================================
+{
+  "uri": "/anything/job",
+  "plugins": {
+    "jwt-auth": {},
+    "serverless-pre-function": {
+      "phase": "access",
+      "functions": [
+        "return function(conf, ctx)\n  local http = require(\"resty.http\")\n  local core = require(\"apisix.core\")\n  local lrucache = core.lrucache\n  local now = ngx.now\n  local function fetch_token()\n    local httpc = http.new()\n    local res, err = httpc:request_uri(\"https://keycloak.example.com/auth/realms/your-realm/protocol/openid-connect/token\", {\n      method = \"POST\",\n      body = ngx.encode_args({\n        client_id = \"api-client\",\n        client_secret = \"your-client-secret\",\n        grant_type = \"client_credentials\"\n      }),\n      headers = {\n        [\"Content-Type\"] = \"application/x-www-form-urlencoded\"\n      },\n      ssl_verify = false\n    })\n    if not res then\n      core.log.error(\"HTTP request failed: \", err)\n      return nil, \"no_response\"\n    end\n    if res.status ~= 200 then\n      core.log.error(\"Invalid response (\", res.status, \"): \", res.body)\n      return nil, \"bad_status\"\n    end\n    local body = core.json.decode(res.body)\n    if not body or not body.access_token then\n      core.log.error(\"Failed to parse access token: \", res.body)\n      return nil, \"bad_json\"\n    end\n    local expiry = now() + (body.expires_in or 3600) - 60\n    return {token = body.access_token, expiry = expiry}, nil\n  end\n  local token_cache = lrucache.global(\"keycloak_token_cache\", 10, function() return {} end)\n  local cache = token_cache or {}\n  if not cache.token or not cache.expiry or cache.expiry <= now() then\n    local t, err = fetch_token()\n    if not t then\n      core.log.error(\"Failed to fetch token: \", err)\n      return 500, { message = \"Failed to get bearer token\" }\n    end\n    cache.token = t.token\n    cache.expiry = t.expiry\n    lrucache.global(\"keycloak_token_cache\", 10, function() return cache end)\n  end\n  core.request.set_header(ctx, \"Authorization\", \"Bearer \" .. cache.token)\nend"
+      ]
+    }
+  },
+  "upstream": {
+    "type": "roundrobin",
+    "nodes": {
+      "httpbin.org:443": 1
+    },
+    "scheme": "https"
+  }
+}
