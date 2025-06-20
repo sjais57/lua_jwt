@@ -1,61 +1,4 @@
-curl -X PUT "http://127.0.0.1:9180/apisix/admin/routes/secure-api" \
-  -H "X-API-KEY: ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "uri": "/api/secure/*",
-    "plugins": {
-      "jwt-auth": {},
-      "serverless-pre-function": {
-        "phase": "access",
-        "functions": [
-          "local cjson = require '\''cjson.safe'\''\n\
-          local http = require '\''resty.http'\''\n\
-          local token_cache = ngx.shared.token_cache\n\
-          local token = token_cache:get('\''access_token'\'')\n\
-          local expires = token_cache:get('\''expires_at'\'')\n\
-          if (not token) or (not expires) or (expires < ngx.now()) then\n\
-            local httpc = http.new()\n\
-            local res, err = httpc:request_uri('\''https://OAUTH2_TOKEN_URL'\'', {\n\
-              method = '\''POST'\'',\n\
-              body = '\''grant_type=client_credentials&client_id=CLIENT_ID&client_secret=CLIENT_SECRET'\'',\n\
-              headers = {['\''Content-Type'\''] = '\''application/x-www-form-urlencoded'\''}\n\
-            })\n\
-            if not res or res.status ~= 200 then\n\
-              ngx.log(ngx.ERR, '\''Failed to fetch token: '\'', err or (res and res.body))\n\
-              return ngx.exit(500)\n\
-            end\n\
-            local data = cjson.decode(res.body)\n\
-            token = data['\''access_token'\'']\n\
-            local expires_in = tonumber(data['\''expires_in'\'']) or 3600\n\
-            local expiry = ngx.now() + expires_in - 60\n\
-            token_cache:set('\''access_token'\'', token, expires_in - 60)\n\
-            token_cache:set('\''expires_at'\'', expiry, expires_in - 60)\n\
-          end\n\
-          ngx.req.set_header('\''Authorization'\'', '\''Bearer '\'' .. token)"
-        ]
-      },
-      "proxy-rewrite": {
-        "regex_uri": ["/api/secure/(.*)", "/REAL_API_PATH/$1"],
-        "scheme": "https",
-        "host": "UPSTREAM_HOST"
-      }
-    },
-    "upstream": {
-      "type": "roundrobin",
-      "scheme": "https",
-      "nodes": {
-        "UPSTREAM_HOST:443": 1
-      }
-    }
-  }'
-
-
-
-===============
-curl -X PUT "http://127.0.0.1:9180/apisix/admin/routes/secure-api" \
--H "X-API-KEY: ADMIN_API_KEY" \
--H "Content-Type: application/json" \
--d '{
+{
   "uri": "/api/slurm/job/*",
   "plugins": {
     "jwt-auth": {},
@@ -78,4 +21,32 @@ curl -X PUT "http://127.0.0.1:9180/apisix/admin/routes/secure-api" \
       "UPSTREAM_HOST:443": 1
     }
   }
-}'
+}
+
+
+curl -X PUT "http://127.0.0.1:9180/apisix/admin/routes/secure-api" \
+  -H "X-API-KEY: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d @route.json
+
+
+====================
+
+{
+  "uri": "/test",
+  "plugins": {
+    "serverless-pre-function": {
+      "phase": "access",
+      "functions": [
+        "ngx.log(ngx.ERR, \"hello world from serverless-pre-function\")"
+      ]
+    }
+  },
+  "upstream": {
+    "type": "roundrobin",
+    "scheme": "https",
+    "nodes": {
+      "yourupstream.com:443": 1
+    }
+  }
+}
