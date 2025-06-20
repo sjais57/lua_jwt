@@ -7,6 +7,11 @@
       "functions": [
         "return function(conf, ctx)\n  local http = require(\"resty.http\")\n  local core = require(\"apisix.core\")\n  local token_cache_key = \"oauth2_token\"\n  local token, err = core.lrucache.global(token_cache_key, 3600, function()\n    local httpc = http.new()\n    local res, err = httpc:request_uri(\"https://keycloak.example.com/auth/realms/your-realm/protocol/openid-connect/token\", {\n      method = \"POST\",\n      body = ngx.encode_args({\n        client_id = \"api-client\",\n        client_secret = \"your-client-secret\",\n        grant_type = \"client_credentials\"\n      }),\n      headers = {\n        [\"Content-Type\"] = \"application/x-www-form-urlencoded\"\n      },\n      ssl_verify = false\n    })\n    if not res then\n      core.log.error(\"HTTP request failed: \", err)\n      return nil\n    end\n    if res.status ~= 200 then\n      core.log.error(\"Invalid response (\", res.status, \"): \", res.body)\n      return nil\n    end\n    local body = core.json.decode(res.body)\n    if not body or not body.access_token then\n      core.log.error(\"Failed to parse access token: \", res.body)\n      return nil\n    end\n    return body.access_token\n  end)\n  if not token then\n    core.log.error(\"Final error fetching token: \", err)\n    return 500, { message = \"Failed to get bearer token\" }\n  end\n  core.request.set_header(ctx, \"Authorization\", \"Bearer \" .. token)\nend"
       ]
+    },
+    "proxy-rewrite": {
+      "headers": {
+        "Authorization": null
+      }
     }
   },
   "upstream": {
