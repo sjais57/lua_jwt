@@ -1,0 +1,110 @@
+from fastapi import FastAPI, HTTPException, Body
+from typing import List
+from pydantic import BaseModel
+import yaml
+
+app = FastAPI(title="LLM Model Catalog API")
+
+class ModelEntry(BaseModel):
+    family: str
+    version: str
+    variant: str
+    unique_name: str
+    aihpc_name: str
+    support_frame: List[str]
+    inference_types: List[str]
+
+class ModelQuery(BaseModel):
+    name: str
+    search_by: str = "unique_name"  # or "aihpc_name"
+
+def load_catalog(path="model_catalog.yaml"):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+def flatten_models(model_catalog):
+    models = []
+    for family, versions in model_catalog['model_family'].items():
+        for version, variants in versions.items():
+            for variant, details in variants.items():
+                models.append({
+                    "family": family,
+                    "version": version,
+                    "variant": variant,
+                    **details
+                })
+    return models
+
+model_catalog = load_catalog()
+flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+
+@app.post("/models/get", response_model=ModelEntry)
+def get_model_by_body(query: ModelQuery = Body(...)):
+    if query.search_by == "unique_name":
+        for model in flat_models:
+            if model.unique_name == query.name:
+                return model
+    elif query.search_by == "aihpc_name":
+        for model in flat_models:
+            if model.aihpc_name == query.name:
+                return model
+    else:
+        raise HTTPException(status_code=400, detail="Invalid search_by value")
+    raise HTTPException(status_code=404, detail="Model not found")
+
+
+=================
+Full working:
+from fastapi import FastAPI, HTTPException, Body
+from typing import List
+from pydantic import BaseModel
+import yaml
+
+app = FastAPI(title="LLM Model Catalog API")
+
+class ModelEntry(BaseModel):
+    family: str
+    version: str
+    variant: str
+    unique_name: str
+    aihpc_name: str
+    support_frame: List[str]
+    inference_types: List[str]
+
+class ModelQuery(BaseModel):
+    name: str
+    search_by: str = "unique_name"  # or "aihpc_name"
+
+def load_catalog(path="model_catalog.yaml"):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+def flatten_models(model_catalog):
+    models = []
+    for family, versions in model_catalog['model_family'].items():
+        for version, variants in versions.items():
+            for variant, details in variants.items():
+                models.append({
+                    "family": family,
+                    "version": version,
+                    "variant": variant,
+                    **details
+                })
+    return models
+
+model_catalog = load_catalog()
+flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+
+@app.post("/models/get", response_model=ModelEntry)
+def get_model_by_body(query: ModelQuery = Body(...)):
+    if query.search_by == "unique_name":
+        for model in flat_models:
+            if model.unique_name == query.name:
+                return model
+    elif query.search_by == "aihpc_name":
+        for model in flat_models:
+            if model.aihpc_name == query.name:
+                return model
+    else:
+        raise HTTPException(status_code=400, detail="Invalid search_by value")
+    raise HTTPException(status_code=404, detail="Model not found")
