@@ -119,3 +119,57 @@ def reload_models():
     flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
     return {"status": "reloaded"}
 
+====================================================
+
+from fastapi import FastAPI, HTTPException, Query
+from typing import List, Optional
+import yaml
+from pydantic import BaseModel
+
+app = FastAPI()
+
+# --- Model, loader, flattener (reuse from previous example) ---
+class ModelEntry(BaseModel):
+    family: str
+    version: str
+    variant: str
+    unique_name: str
+    aihpc_name: str
+    support_frame: List[str]
+    inference_types: List[str]
+
+def load_catalog(path="model_catalog.yaml"):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+def flatten_models(model_catalog):
+    models = []
+    for family, versions in model_catalog['model_family'].items():
+        for version, variants in versions.items():
+            for variant, details in variants.items():
+                models.append({
+                    "family": family,
+                    "version": version,
+                    "variant": variant,
+                    **details
+                })
+    return models
+
+model_catalog = load_catalog()
+flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+
+# --- Endpoint: get model by unique_name ---
+@app.get("/models/by-unique-name", response_model=ModelEntry)
+def get_model_by_unique_name(name: str = Query(..., description="unique_name of the model")):
+    for model in flat_models:
+        if model.unique_name == name:
+            return model
+    raise HTTPException(status_code=404, detail="Model not found")
+
+# --- Optional: get model by aihpc_name ---
+@app.get("/models/by-aihpc-name", response_model=ModelEntry)
+def get_model_by_aihpc_name(name: str = Query(..., description="aihpc_name of the model")):
+    for model in flat_models:
+        if model.aihpc_name == name:
+            return model
+    raise HTTPException(status_code=404, detail="Model not found")
