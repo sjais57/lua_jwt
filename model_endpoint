@@ -1,0 +1,121 @@
+import yaml
+
+# Load your YAML file
+with open('model_catalog.yaml', 'r') as f:
+    model_catalog = yaml.safe_load(f)
+
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+import yaml
+
+app = FastAPI()
+
+# Load once at startup
+with open('model_catalog.yaml', 'r') as f:
+    model_catalog = yaml.safe_load(f)
+
+@app.get("/models")
+def list_models():
+    return JSONResponse(content=model_catalog)
+
+
+def flatten_models(model_catalog):
+    models = []
+    for family, versions in model_catalog['model_family'].items():
+        for version, variants in versions.items():
+            for variant, details in variants.items():
+                models.append({
+                    "family": family,
+                    "version": version,
+                    "variant": variant,
+                    **details
+                })
+    return models
+
+@app.get("/models/flat")
+def list_models_flat():
+    return flatten_models(model_catalog)
+
+====================================
+
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+from typing import List, Optional
+import yaml
+from pydantic import BaseModel
+
+app = FastAPI(title="Model Catalog API")
+
+# --- Pydantic Models ---
+class ModelEntry(BaseModel):
+    family: str
+    version: str
+    variant: str
+    unique_name: str
+    aihpc_name: str
+    support_frame: List[str]
+    inference_types: List[str]
+
+# --- Load Model Catalog ---
+def load_catalog(path="model_catalog.yaml"):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+model_catalog = load_catalog()
+
+# --- Utility to Flatten Nested Catalog ---
+def flatten_models(model_catalog):
+    models = []
+    for family, versions in model_catalog['model_family'].items():
+        for version, variants in versions.items():
+            for variant, details in variants.items():
+                models.append({
+                    "family": family,
+                    "version": version,
+                    "variant": variant,
+                    **details
+                })
+    return models
+
+flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+
+# --- Endpoints ---
+
+@app.get("/models", response_model=List[ModelEntry])
+def get_models(
+    family: Optional[str] = Query(None),
+    version: Optional[str] = Query(None),
+    support_frame: Optional[str] = Query(None),
+    inference_type: Optional[str] = Query(None)
+):
+    """
+    List models (flat, filterable by family/version/support_frame/inference_type).
+    """
+    result = flat_models
+    if family:
+        result = [m for m in result if m.family == family]
+    if version:
+        result = [m for m in result if m.version == version]
+    if support_frame:
+        result = [m for m in result if support_frame in m.support_frame]
+    if inference_type:
+        result = [m for m in result if inference_type in m.inference_types]
+    return result
+
+@app.get("/models/raw")
+def get_models_raw():
+    """
+    Return full nested catalog as-is (raw YAML loaded to dict).
+    """
+    return JSONResponse(content=model_catalog)
+
+# --- Optionally: endpoint to reload YAML without restarting app ---
+@app.post("/models/reload")
+def reload_models():
+    global model_catalog, flat_models
+    model_catalog = load_catalog()
+    flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+    return {"status": "reloaded"}
+
