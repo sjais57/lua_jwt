@@ -1,0 +1,47 @@
+model_family:
+  meta-llama:
+    Llama-3.1:
+      8B-Instruct:
+        unique_name: meta-llama_Llama-3.1-8B-Instruct
+        aihpc_name: meta-llama_Llama-3.1-8B-Instruct
+        support_frame:
+          - vllm
+          - trtllm
+          - qntozed
+        inference_types:
+          - completion
+          - chat
+          - streaming
+      70B-Instruct:
+        unique_name: meta-llama_Llama-3.1-70B-Instruct
+        aihpc_name: meta-llama_Llama-3.1-70B-Instruct
+        support_frame:
+          - vllm
+          - trtllm
+          - qntozed
+        inference_types:
+          - completion
+          - chat
+          - streaming
+    Llama-3.3:
+      70B-Instruct:
+        unique_name: meta-llama_Llama-3.3-70B-Instruct
+        aihpc_name: meta-llama_Llama-3.3-70B-Instruct
+        support_frame:
+          - vllm
+          - trtllm
+          - qntozed
+        inference_types:
+          - completion
+          - chat
+          - streaming
+    trtllm:
+      70B-Instruct:
+        unique_name: trtllm_meta-llama_Llama-3.3-70B
+        aihpc_name: trtllm_meta-llama_Llama-3.3-70B-Instruct_fp8_tp4_ifb
+        support_frame:
+          - vllm
+          - trtllm
+        inference_types:
+          - completion
+          - chat
