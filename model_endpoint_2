@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException, Body
-from typing import List
+from fastapi import FastAPI, Query
 from pydantic import BaseModel
+from typing import List, Optional
 import yaml
 
-app = FastAPI(title="LLM Model Catalog API")
+app = FastAPI()
 
+# --- Example Pydantic model ---
 class ModelEntry(BaseModel):
+    model: str
     family: str
     version: str
     variant: str
@@ -14,97 +16,53 @@ class ModelEntry(BaseModel):
     support_frame: List[str]
     inference_types: List[str]
 
-class ModelQuery(BaseModel):
-    name: str
-    search_by: str = "unique_name"  # or "aihpc_name"
+# --- Assume you load this at startup ---
+# For demo, load from file or string
+with open("model_catalog.yaml", "r") as f:
+    model_catalog = yaml.safe_load(f)
 
-def load_catalog(path="model_catalog.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+# --- Your function ---
+def get_model_info(yaml_data, allowed_model_list: Optional[List[str]] = None):
+    model_info_list = []
+    for family_name, family_data in yaml_data.get('model_family', {}).items():
+        for version_name, version_data in family_data.items():
+            for variant_name, variant_data in version_data.items():
+                aihpc_name = variant_data.get('aihpc_name')
+                if allowed_model_list is None or aihpc_name in allowed_model_list:
+                    model_info_list.append({
+                        "model": aihpc_name,
+                        "family": family_name,
+                        "version": version_name,
+                        "variant": variant_name,
+                        "unique_name": variant_data.get('unique_name'),
+                        "aihpc_name": variant_data.get('aihpc_name'),
+                        "support_frame": variant_data.get('support_frame', []),
+                        "inference_types": variant_data.get('inference_types', [])
+                    })
+    return model_info_list
 
-def flatten_models(model_catalog):
-    models = []
-    for family, versions in model_catalog['model_family'].items():
-        for version, variants in versions.items():
-            for variant, details in variants.items():
-                models.append({
-                    "family": family,
-                    "version": version,
-                    "variant": variant,
-                    **details
-                })
-    return models
+# --- The endpoint ---
+@app.get("/models", response_model=List[ModelEntry])
+def get_models(
+    family: Optional[str] = Query(None),
+    version: Optional[str] = Query(None),
+    support_frame: Optional[str] = Query(None),
+    inference_type: Optional[str] = Query(None)
+):
+    """
+    List models (flat, filterable by family/version/support_frame/inference_type).
+    """
+    # Get all models
+    flat_models = get_model_info(model_catalog)
 
-model_catalog = load_catalog()
-flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
+    # Apply filters
+    if family:
+        flat_models = [m for m in flat_models if m["family"] == family]
+    if version:
+        flat_models = [m for m in flat_models if m["version"] == version]
+    if support_frame:
+        flat_models = [m for m in flat_models if support_frame in m["support_frame"]]
+    if inference_type:
+        flat_models = [m for m in flat_models if inference_type in m["inference_types"]]
 
-@app.post("/models/get", response_model=ModelEntry)
-def get_model_by_body(query: ModelQuery = Body(...)):
-    if query.search_by == "unique_name":
-        for model in flat_models:
-            if model.unique_name == query.name:
-                return model
-    elif query.search_by == "aihpc_name":
-        for model in flat_models:
-            if model.aihpc_name == query.name:
-                return model
-    else:
-        raise HTTPException(status_code=400, detail="Invalid search_by value")
-    raise HTTPException(status_code=404, detail="Model not found")
-
-
-=================
-Full working:
-from fastapi import FastAPI, HTTPException, Body
-from typing import List
-from pydantic import BaseModel
-import yaml
-
-app = FastAPI(title="LLM Model Catalog API")
-
-class ModelEntry(BaseModel):
-    family: str
-    version: str
-    variant: str
-    unique_name: str
-    aihpc_name: str
-    support_frame: List[str]
-    inference_types: List[str]
-
-class ModelQuery(BaseModel):
-    name: str
-    search_by: str = "unique_name"  # or "aihpc_name"
-
-def load_catalog(path="model_catalog.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-def flatten_models(model_catalog):
-    models = []
-    for family, versions in model_catalog['model_family'].items():
-        for version, variants in versions.items():
-            for variant, details in variants.items():
-                models.append({
-                    "family": family,
-                    "version": version,
-                    "variant": variant,
-                    **details
-                })
-    return models
-
-model_catalog = load_catalog()
-flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-
-@app.post("/models/get", response_model=ModelEntry)
-def get_model_by_body(query: ModelQuery = Body(...)):
-    if query.search_by == "unique_name":
-        for model in flat_models:
-            if model.unique_name == query.name:
-                return model
-    elif query.search_by == "aihpc_name":
-        for model in flat_models:
-            if model.aihpc_name == query.name:
-                return model
-    else:
-        raise HTTPException(status_code=400, detail="Invalid search_by value")
-    raise HTTPException(status_code=404, detail="Model not found")
+    return flat_models
