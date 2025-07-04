@@ -66,3 +66,44 @@ def get_models(
         flat_models = [m for m in flat_models if inference_type in m["inference_types"]]
 
     return flat_models
+
+
+==============================================================
+
+def get_model_info(yaml_data, allowed_model_list: Optional[List[str]] = None):
+    model_info_list = []
+
+    for model_type in yaml_data.get('model_type', []):
+        model_type_name = model_type.get('name', '')
+
+        for family in model_type.get('model_family', []):
+            family_name = family.get('name', '')
+
+            for collection in family.get('model_collection', []):
+                collection_name = collection.get('name', '')
+
+                for variant in collection.get('variants', []):
+                    variant_name = variant.get('name', '')
+
+                    for config in variant.get('configs', []):
+                        unique_model_name = config.get('unique_model_name', '')
+                        support_frame = [config.get('supported_framework')] if config.get('supported_framework') else []
+
+                        if allowed_model_list is None or unique_model_name in allowed_model_list:
+                            model_info_list.append({
+                                "model": unique_model_name,
+                                "family": family_name,
+                                "version": model_type_name,
+                                "collection": collection_name,
+                                "variant": variant_name,
+                                "unique_name": unique_model_name,
+                                "aihpc_name": config.get('hpc_model_name', ''),
+                                "support_frame": support_frame,
+                                "inference_types": [],  # your YAML does not show this, so empty
+                                "model_category": config.get('model_category', ''),
+                                "script_name": config.get('script_name', ''),
+                                "tasks": config.get('tasks', None)
+                            })
+
+    return model_info_list
+
