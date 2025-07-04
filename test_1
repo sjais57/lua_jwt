@@ -1,0 +1,8 @@
+allowed_model_list = [] 
+allowed_model_list = [m.strip().strip('"').strip("'") for m in models_str.split(",")]
+
+#Build clean list for function use
+    allowed_model_list = [m.strip().strip('"').strip("'") for m in models_str.split(",")]
+
+# Call your function
+    support_frame_map = get_supported_frameworks(yaml_data, allowed_model_list)
