@@ -5,26 +5,47 @@ import re
 with open("model_catalog.yaml", "r") as f:
     model_catalog = yaml.safe_load(f)
 
-# --- Example policy_content ---
+# --- Example policy content ---
 policy_content = """
 allowed_models := ["abc", "xyz"]
 """
 
-# --- Extract allowed models from policy_content ---
+allowed_model = []
+
 pattern = r'allowed_models\s*:=\s*\[(.*?)\]'
 match = re.search(pattern, policy_content)
 
-allowed_model_list = None
 if match:
     models_str = match.group(1)
-    allowed_model_list = [
-        m.strip().strip('"').strip("'") 
-        for m in models_str.split(",") if m.strip()
+    allowed_model_list = [m.strip().strip('"').strip("'") 
+                          for m in models_str.split(",") if m.strip()]
+
+    # Get full model info filtered by hpc_model_name
+    model_info_map = get_model_info_map(model_catalog, allowed_model_list)
+
+    # Build allowed_model list with all details
+    allowed_model = [
+        {
+            "model": model_name,
+            **model_info_map.get(model_name, {})
+        }
+        for model_name in allowed_model_list
+        if model_name in model_info_map
     ]
 
-# --- Walk YAML and filter by allowed_model_list ---
-def get_allowed_models(yaml_data, allowed_model_list):
-    model_info_list = []
+    print("✅ Allowed models with details:")
+    for m in allowed_model:
+        print(m)
+else:
+    print("❌ No allowed_models found in policy_content")
+
+
+# --- The function ---
+def get_model_info_map(yaml_data, allowed_model_list):
+    """
+    Return a dict where key = hpc_model_name, value = full model info dict
+    """
+    model_info_map = {}
 
     for model_type in yaml_data.get('model_type', []):
         model_type_name = model_type.get('name', '')
@@ -40,9 +61,9 @@ def get_allowed_models(yaml_data, allowed_model_list):
 
                     for config in variant.get('configs', []):
                         hpc_model_name = config.get('hpc_model_name', '')
-                        if allowed_model_list is None or hpc_model_name in allowed_model_list:
-                            model_info = {
-                                "model": config.get('unique_model_name', ''),
+
+                        if hpc_model_name in allowed_model_list:
+                            model_info_map[hpc_model_name] = {
                                 "model_type": model_type_name,
                                 "family": family_name,
                                 "collection": collection_name,
@@ -55,16 +76,5 @@ def get_allowed_models(yaml_data, allowed_model_list):
                                 "tasks": config.get('tasks', ''),
                                 "base_model_name": config.get('base_model_name', '')
                             }
-                            model_info_list.append(model_info)
 
-    return model_info_list
-
-# --- Run and print ---
-allowed_models = get_allowed_models(model_catalog, allowed_model_list)
-
-if allowed_models:
-    print("✅ Allowed models with details:")
-    for m in allowed_models:
-        print(m)
-else:
-    print("❌ No allowed models matched or no allowed_models defined.")
+    return model_info_map
