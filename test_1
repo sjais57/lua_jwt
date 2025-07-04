@@ -17,8 +17,10 @@ match = re.search(pattern, policy_content)
 
 if match:
     models_str = match.group(1)
-    allowed_model_list = [m.strip().strip('"').strip("'") 
-                          for m in models_str.split(",") if m.strip()]
+    allowed_model_list = [
+        m.strip().strip('"').strip("'")
+        for m in models_str.split(",") if m.strip()
+    ]
 
     # Get full model info filtered by hpc_model_name
     model_info_map = get_model_info_map(model_catalog, allowed_model_list)
@@ -36,15 +38,13 @@ if match:
     print("✅ Allowed models with details:")
     for m in allowed_model:
         print(m)
+
 else:
     print("❌ No allowed_models found in policy_content")
 
 
-# --- The function ---
+# --- Function without Optional ---
 def get_model_info_map(yaml_data, allowed_model_list):
-    """
-    Return a dict where key = hpc_model_name, value = full model info dict
-    """
     model_info_map = {}
 
     for model_type in yaml_data.get('model_type', []):
