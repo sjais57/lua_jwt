@@ -1,101 +1,37 @@
-def get_model_info(yaml_data, allowed_model_list):
-    model_info_map = {}
-    for family_name, family_data in yaml_data.get('model_family', {}).items():
-        for version_name, version_data in family_data.items():
-            for variant_name, variant_data in version_data.items():
-                aihpc_name = variant_data.get('aihpc_name')
-                if aihpc_name in allowed_model_list:
-                    # Store entire variant_data for that model
-                    model_info_map[aihpc_name] = {
-                        "family": family_name,
-                        "version": version_name,
-                        "variant": variant_name,
-                        "unique_name": variant_data.get('unique_name'),
-                        "aihpc_name": variant_data.get('aihpc_name'),
-                        "support_frame": variant_data.get('support_frame'),
-                        "inference_types": variant_data.get('inference_types')
-                    }
-    return model_info_map
-
-allowed_model = []
-
-pattern = r'allowed_models\s*:=\s*\[(.*?)\]'
-match = re.search(pattern, policy_content)
-
-if match:
-    models_str = match.group(1)
-    allowed_model_list = [m.strip().strip('"').strip("'") 
-                          for m in models_str.split(",") if m.strip()]
-
-    # Get full model info
-    model_info_map = get_model_info(model_catalog, allowed_model_list)
-
-    # Build allowed_model list with all details
-    allowed_model = [
-        {
-            "model": model_name,
-            **model_info_map.get(model_name, {})
-        }
-        for model_name in allowed_model_list
-    ]
-
-    # Optional debug
-    print("✅ allowed_model with all details:", allowed_model)
-
-else:
-    print("❌ No allowed_models found in policy_content")
-============================================================================
-
-
 def get_model_info(yaml_data, allowed_model_list: Optional[List[str]] = None):
     model_info_list = []
 
     for model_type in yaml_data.get('model_type', []):
         model_type_name = model_type.get('name', '')
 
-        if "model_family" not in model_type:
-            print(f"⚠ model_family missing in model_type: {model_type_name}")
-            continue
-
         for family in model_type.get('model_family', []) or []:
             family_name = family.get('name', '')
-
-            if "model_collection" not in family:
-                print(f"⚠ model_collection missing in model_family: {family_name}")
-                continue
 
             for collection in family.get('model_collection', []) or []:
                 collection_name = collection.get('name', '')
 
-                if "variants" not in collection:
-                    print(f"⚠ variants missing in model_collection: {collection_name}")
-                    continue
-
                 for variant in collection.get('variants', []) or []:
                     variant_name = variant.get('name', '')
 
-                    if "configs" not in variant:
-                        print(f"⚠ configs missing in variant: {variant_name}")
-                        continue
-
                     for config in variant.get('configs', []) or []:
                         unique_model_name = config.get('unique_model_name', '')
+                        hpc_model_name = config.get('hpc_model_name', '')
                         support_frame = [config.get('supported_framework')] if config.get('supported_framework') else []
 
-                        if allowed_model_list is None or unique_model_name in allowed_model_list:
+                        if allowed_model_list is None or hpc_model_name in allowed_model_list:
                             model_info_list.append({
                                 "model": unique_model_name,
+                                "model_type": model_type_name,
                                 "family": family_name,
-                                "version": model_type_name,
                                 "collection": collection_name,
                                 "variant": variant_name,
                                 "unique_name": unique_model_name,
-                                "aihpc_name": config.get('hpc_model_name', ''),
+                                "aihpc_name": hpc_model_name,
                                 "support_frame": support_frame,
-                                "inference_types": [],  # No inference_types in YAML
                                 "model_category": config.get('model_category', ''),
                                 "script_name": config.get('script_name', ''),
-                                "tasks": config.get('tasks', None)
+                                "tasks": config.get('tasks', ''),
+                                "base_model_name": config.get('base_model_name', '')
                             })
 
     return model_info_list
