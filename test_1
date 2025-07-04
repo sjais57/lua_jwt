@@ -35,3 +35,28 @@ def get_model_info(yaml_data, allowed_model_list: Optional[List[str]] = None):
                             })
 
     return model_info_list
+
+allowed_model = []
+
+pattern = r'allowed_models\s*:=\s*\[(.*?)\]'
+match = re.search(pattern, policy_content)
+
+if match:
+    models_str = match.group(1)
+    allowed_model_list = [
+        m.strip().strip('"').strip("'")
+        for m in models_str.split(",")
+        if m.strip()
+    ]
+
+    # Get full model info where hpc_model_name matches allowed_model_list
+    model_info_list = get_model_info(model_catalog, allowed_model_list)
+
+    # Build allowed_model list with all details
+    allowed_model = model_info_list
+
+    print("✅ allowed_model with all details:", allowed_model)
+
+else:
+    print("❌ No allowed_models found in policy_content")
+    allowed_model = []  # explicitly empty if no match
