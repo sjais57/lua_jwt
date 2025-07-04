@@ -1,93 +1,121 @@
 from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from typing import List, Optional
 import yaml
+import threading
 
-app = FastAPI()
+app = FastAPI(title="Model Catalog API")
 
-# --- Pydantic model ---
+CATALOG_PATH = "model_catalog.yaml"
+lock = threading.Lock()  # For thread-safe reloads
+
+# --- Data Model ---
 class ModelEntry(BaseModel):
-    model: str
+    model_type: str
     family: str
-    version: str
     collection: str
     variant: str
     unique_name: str
-    aihpc_name: Optional[str]
+    aihpc_name: str
+    hpc_model_name: str   # <--- Included this field
     support_frame: List[str]
-    inference_types: List[str]
     model_category: Optional[str]
     script_name: Optional[str]
-    tasks: Optional[float]
+    tasks: Optional[str]
+    base_model_name: Optional[str]
 
-# --- Load YAML ---
-with open("model_catalog.yaml", "r") as f:
-    model_catalog = yaml.safe_load(f)
+# --- YAML Loader ---
+def load_catalog(path: str = CATALOG_PATH) -> Dict[str, Any]:
+    """Loads the YAML model catalog file."""
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
 
-# --- Helper function ---
-def get_model_info(yaml_data, allowed_model_list: Optional[List[str]] = None):
+# --- Flattener ---
+def get_model_info(
+    yaml_data: Dict[str, Any], 
+    allowed_model_list: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Flattens YAML catalog, optionally filtering by allowed unique_model_names.
+    """
     model_info_list = []
-
     for model_type in yaml_data.get('model_type', []):
         model_type_name = model_type.get('name', '')
-
         for family in model_type.get('model_family', []):
             family_name = family.get('name', '')
-
             for collection in family.get('model_collection', []):
                 collection_name = collection.get('name', '')
-
                 for variant in collection.get('variants', []):
                     variant_name = variant.get('name', '')
-
                     for config in variant.get('configs', []):
                         unique_model_name = config.get('unique_model_name', '')
+                        hpc_model_name = config.get('hpc_model_name', '')
                         support_frame = [config.get('supported_framework')] if config.get('supported_framework') else []
 
                         if allowed_model_list is None or unique_model_name in allowed_model_list:
                             model_info_list.append({
-                                "model": unique_model_name,
+                                "model_type": model_type_name,
                                 "family": family_name,
-                                "version": model_type_name,
                                 "collection": collection_name,
                                 "variant": variant_name,
                                 "unique_name": unique_model_name,
-                                "aihpc_name": config.get('hpc_model_name', ''),
+                                "aihpc_name": hpc_model_name,       # <--- For backward compatibility
+                                "hpc_model_name": hpc_model_name,   # <--- Explicit field
                                 "support_frame": support_frame,
-                                "inference_types": [],  # YAML doesn't define this
                                 "model_category": config.get('model_category', ''),
                                 "script_name": config.get('script_name', ''),
-                                "tasks": config.get('tasks', None)
+                                "tasks": config.get('tasks', ''),
+                                "base_model_name": config.get('base_model_name', ''),
                             })
-
     return model_info_list
 
-# --- Endpoint ---
+# --- Initial Data Load ---
+with lock:
+    model_catalog = load_catalog()
+    flat_models = [ModelEntry(**m) for m in get_model_info(model_catalog)]
+
+# --- Endpoints ---
 @app.get("/models", response_model=List[ModelEntry])
 def get_models(
+    model_type: Optional[str] = Query(None, description="Filter by model type"),
     family: Optional[str] = Query(None, description="Filter by model family"),
-    version: Optional[str] = Query(None, description="Filter by model type / version"),
     collection: Optional[str] = Query(None, description="Filter by model collection"),
-    variant: Optional[str] = Query(None, description="Filter by variant"),
-    support_frame: Optional[str] = Query(None, description="Filter by support_frame"),
-    model_category: Optional[str] = Query(None, description="Filter by model_category")
-):
+    variant: Optional[str] = Query(None, description="Filter by model variant"),
+    support_frame: Optional[str] = Query(None, description="Filter by supported framework")
+) -> List[ModelEntry]:
     """
-    List models with optional filters.
+    List all models, optionally filtered by model_type, family, collection, variant, or support_frame.
+    Both 'aihpc_name' and 'hpc_model_name' fields are included.
     """
-    flat_models = get_model_info(model_catalog)
-
+    result = flat_models
+    # Filtering is case-insensitive for usability
+    if model_type:
+        result = [m for m in result if m.model_type.lower() == model_type.lower()]
     if family:
-        flat_models = [m for m in flat_models if m["family"] == family]
-    if version:
-        flat_models = [m for m in flat_models if m["version"] == version]
+        result = [m for m in result if m.family.lower() == family.lower()]
     if collection:
-        flat_models = [m for m in flat_models if m["collection"] == collection]
+        result = [m for m in result if m.collection.lower() == collection.lower()]
     if variant:
-        flat_models = [m for m in flat_models if m["variant"] == variant]
+        result = [m for m in result if m.variant.lower() == variant.lower()]
     if support_frame:
-        flat_models = [m for m in flat_models if support_frame in m["support_frame"]]
-    if model_category:
-        flat_models = [m for m in flat_models if m["model_category"] == model_category]
+        result = [m for m in result if support_frame.lower() in (sf.lower() for sf in m.support_frame)]
+    return result
 
-    return flat_models
+@app.get("/models/raw")
+def get_models_raw() -> JSONResponse:
+    """
+    Return the full, original nested YAML model catalog as a JSON dict.
+    """
+    return JSONResponse(content=model_catalog)
+
+@app.post("/models/reload")
+def reload_models() -> Dict[str, str]:
+    """
+    Reload the model catalog YAML file and refresh the flattened model list.
+    """
+    global model_catalog, flat_models
+    with lock:
+        model_catalog = load_catalog()
+        flat_models = [ModelEntry(**m) for m in get_model_info(model_catalog)]
+    return {"status": "reloaded"}
