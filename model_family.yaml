@@ -45,3 +45,42 @@ model_family:
         inference_types:
           - completion
           - chat
+
+  google:
+    Gemini-1.0:
+      Pro:
+        unique_name: google_Gemini-1.0-Pro
+        aihpc_name: google_Gemini-1.0-Pro
+        support_frame:
+          - vllm
+          - trtllm
+        inference_types:
+          - chat
+          - completion
+      Ultra:
+        unique_name: google_Gemini-1.0-Ultra
+        aihpc_name: google_Gemini-1.0-Ultra
+        support_frame:
+          - vllm
+        inference_types:
+          - chat
+
+  facebook:
+    OPT-6.7B:
+      Base:
+        unique_name: facebook_OPT-6.7B-Base
+        aihpc_name: facebook_OPT-6.7B-Base
+        support_frame:
+          - vllm
+          - trtllm
+        inference_types:
+          - completion
+          - chat
+    OPT-13B:
+      Base:
+        unique_name: facebook_OPT-13B-Base
+        aihpc_name: facebook_OPT-13B-Base
+        support_frame:
+          - vllm
+        inference_types:
+          - completion
