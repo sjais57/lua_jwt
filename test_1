@@ -1,3 +1,14 @@
+def get_supported_frameworks(yaml_data, allowed_model_list):
+    model_to_framework = {}
+    for family_name, family_data in yaml_data.get('model_family', {}).items():
+        for version_name, version_data in family_data.items():
+            for variant_name, variant_data in version_data.items():
+                aihpc_name = variant_data.get('aihpc_name')
+                if aihpc_name in allowed_model_list:
+                    model_to_framework[aihpc_name] = variant_data.get('support_frame')
+    return model_to_framework
+
+
 allowed_model_list = [] 
 allowed_model_list = [m.strip().strip('"').strip("'") for m in models_str.split(",")]
 
