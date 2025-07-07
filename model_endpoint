@@ -1,175 +1,74 @@
-import yaml
+def get_model_map_info(
+    model_catalog: Dict[str, Any],
+    allowed_model_list: Optional[List[str]] = None,
+    as_dict: bool = False
+) -> Union[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    model_info_map = {} if as_dict else []
 
-# Load your YAML file
-with open('model_catalog.yaml', 'r') as f:
-    model_catalog = yaml.safe_load(f)
+    for model_type in model_catalog.get('model_type', []):
+        model_type_name = model_type.get('name', '')
+        for family in model_type.get('model_family', []):
+            family_name = family.get('name', '')
+            for collection in family.get('model_collection', []):
+                collection_name = collection.get('name', '')
+                for variant in collection.get('variants', []):
+                    variant_name = variant.get('name', '')
+                    for config in variant.get('configs', []):
+                        unique_model_name = config.get('unique_model_name', '')
+                        hpc_model_name = config.get('hpc_model_name', '')
 
+                        if allowed_model_list and unique_model_name not in allowed_model_list:
+                            continue
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+                        # Compose a key to group by unique model
+                        key = unique_model_name if as_dict else None
 
-import yaml
+                        model_entry = None
+                        if as_dict:
+                            if key not in model_info_map:
+                                model_info_map[key] = {
+                                    "model": f"{family_name}_{collection_name}-{variant_name}",
+                                    "model_type": model_type_name,
+                                    "family": family_name,
+                                    "collection": collection_name,
+                                    "variant": variant_name,
+                                    "unique_name": unique_model_name,
+                                    "aihpc_name": hpc_model_name,
+                                    "hpc_model_name": hpc_model_name,
+                                    "support_frame": [],
+                                    "model_category": config.get('model_category', ''),
+                                    "script_name": config.get('script_name', ''),
+                                    "tasks": str(config.get('tasks', '')) if config.get('tasks') is not None else '',
+                                    "base_model_name": config.get('base_model_name', ''),
+                                }
+                            model_entry = model_info_map[key]
+                        else:
+                            # Search existing entry
+                            model_entry = next(
+                                (m for m in model_info_map if m["unique_name"] == unique_model_name),
+                                None
+                            )
+                            if model_entry is None:
+                                model_entry = {
+                                    "model": f"{family_name}_{collection_name}-{variant_name}",
+                                    "model_type": model_type_name,
+                                    "family": family_name,
+                                    "collection": collection_name,
+                                    "variant": variant_name,
+                                    "unique_name": unique_model_name,
+                                    "aihpc_name": hpc_model_name,
+                                    "hpc_model_name": hpc_model_name,
+                                    "support_frame": [],
+                                    "model_category": config.get('model_category', ''),
+                                    "script_name": config.get('script_name', ''),
+                                    "tasks": str(config.get('tasks', '')) if config.get('tasks') is not None else '',
+                                    "base_model_name": config.get('base_model_name', ''),
+                                }
+                                model_info_map.append(model_entry)
 
-app = FastAPI()
+                        # Add supported framework if present
+                        fw = config.get('supported_framework')
+                        if fw and fw not in model_entry['support_frame']:
+                            model_entry['support_frame'].append(fw)
 
-# Load once at startup
-with open('model_catalog.yaml', 'r') as f:
-    model_catalog = yaml.safe_load(f)
-
-@app.get("/models")
-def list_models():
-    return JSONResponse(content=model_catalog)
-
-
-def flatten_models(model_catalog):
-    models = []
-    for family, versions in model_catalog['model_family'].items():
-        for version, variants in versions.items():
-            for variant, details in variants.items():
-                models.append({
-                    "family": family,
-                    "version": version,
-                    "variant": variant,
-                    **details
-                })
-    return models
-
-@app.get("/models/flat")
-def list_models_flat():
-    return flatten_models(model_catalog)
-
-====================================
-
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from typing import List, Optional
-import yaml
-from pydantic import BaseModel
-
-app = FastAPI(title="Model Catalog API")
-
-# --- Pydantic Models ---
-class ModelEntry(BaseModel):
-    family: str
-    version: str
-    variant: str
-    unique_name: str
-    aihpc_name: str
-    support_frame: List[str]
-    inference_types: List[str]
-
-# --- Load Model Catalog ---
-def load_catalog(path="model_catalog.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-model_catalog = load_catalog()
-
-# --- Utility to Flatten Nested Catalog ---
-def flatten_models(model_catalog):
-    models = []
-    for family, versions in model_catalog['model_family'].items():
-        for version, variants in versions.items():
-            for variant, details in variants.items():
-                models.append({
-                    "family": family,
-                    "version": version,
-                    "variant": variant,
-                    **details
-                })
-    return models
-
-flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-
-# --- Endpoints ---
-
-@app.get("/models", response_model=List[ModelEntry])
-def get_models(
-    family: Optional[str] = Query(None),
-    version: Optional[str] = Query(None),
-    support_frame: Optional[str] = Query(None),
-    inference_type: Optional[str] = Query(None)
-):
-    """
-    List models (flat, filterable by family/version/support_frame/inference_type).
-    """
-    result = flat_models
-    if family:
-        result = [m for m in result if m.family == family]
-    if version:
-        result = [m for m in result if m.version == version]
-    if support_frame:
-        result = [m for m in result if support_frame in m.support_frame]
-    if inference_type:
-        result = [m for m in result if inference_type in m.inference_types]
-    return result
-
-@app.get("/models/raw")
-def get_models_raw():
-    """
-    Return full nested catalog as-is (raw YAML loaded to dict).
-    """
-    return JSONResponse(content=model_catalog)
-
-# --- Optionally: endpoint to reload YAML without restarting app ---
-@app.post("/models/reload")
-def reload_models():
-    global model_catalog, flat_models
-    model_catalog = load_catalog()
-    flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-    return {"status": "reloaded"}
-
-====================================================
-
-from fastapi import FastAPI, HTTPException, Query
-from typing import List, Optional
-import yaml
-from pydantic import BaseModel
-
-app = FastAPI()
-
-# --- Model, loader, flattener (reuse from previous example) ---
-class ModelEntry(BaseModel):
-    family: str
-    version: str
-    variant: str
-    unique_name: str
-    aihpc_name: str
-    support_frame: List[str]
-    inference_types: List[str]
-
-def load_catalog(path="model_catalog.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-def flatten_models(model_catalog):
-    models = []
-    for family, versions in model_catalog['model_family'].items():
-        for version, variants in versions.items():
-            for variant, details in variants.items():
-                models.append({
-                    "family": family,
-                    "version": version,
-                    "variant": variant,
-                    **details
-                })
-    return models
-
-model_catalog = load_catalog()
-flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-
-# --- Endpoint: get model by unique_name ---
-@app.get("/models/by-unique-name", response_model=ModelEntry)
-def get_model_by_unique_name(name: str = Query(..., description="unique_name of the model")):
-    for model in flat_models:
-        if model.unique_name == name:
-            return model
-    raise HTTPException(status_code=404, detail="Model not found")
-
-# --- Optional: get model by aihpc_name ---
-@app.get("/models/by-aihpc-name", response_model=ModelEntry)
-def get_model_by_aihpc_name(name: str = Query(..., description="aihpc_name of the model")):
-    for model in flat_models:
-        if model.aihpc_name == name:
-            return model
-    raise HTTPException(status_code=404, detail="Model not found")
+    return model_info_map
