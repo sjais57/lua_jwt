@@ -1,74 +1,61 @@
-def get_model_map_info(
+def get_model_map_info_grouped_frameworks(
     model_catalog: Dict[str, Any],
     allowed_model_list: Optional[List[str]] = None,
     as_dict: bool = False
 ) -> Union[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
     model_info_map = {} if as_dict else []
 
-    for model_type in model_catalog.get('model_type', []):
-        model_type_name = model_type.get('name', '')
-        for family in model_type.get('model_family', []):
-            family_name = family.get('name', '')
-            for collection in family.get('model_collection', []):
-                collection_name = collection.get('name', '')
-                for variant in collection.get('variants', []):
-                    variant_name = variant.get('name', '')
-                    for config in variant.get('configs', []):
-                        unique_model_name = config.get('unique_model_name', '')
-                        hpc_model_name = config.get('hpc_model_name', '')
-
+    for model_type in model_catalog.get("model_type", []):
+        model_type_name = model_type.get("name", "")
+        for family in model_type.get("model_family", []):
+            family_name = family.get("name", "")
+            for collection in family.get("model_collection", []):
+                collection_name = collection.get("name", "")
+                for variant in collection.get("variants", []):
+                    variant_name = variant.get("name", "")
+                    
+                    for config in variant.get("configs", []):
+                        unique_model_name = config.get("unique_model_name", "")
                         if allowed_model_list and unique_model_name not in allowed_model_list:
                             continue
 
-                        # Compose a key to group by unique model
                         key = unique_model_name if as_dict else None
 
-                        model_entry = None
+                        framework_entry = {
+                            "supported_framework": config.get("supported_framework", ""),
+                            "tasks": str(config.get("tasks", "")) if config.get("tasks") is not None else "",
+                            "script_name": config.get("script_name", ""),
+                            "hpc_model_name": config.get("hpc_model_name", "")
+                        }
+
                         if as_dict:
                             if key not in model_info_map:
                                 model_info_map[key] = {
-                                    "model": f"{family_name}_{collection_name}-{variant_name}",
+                                    "model_name": unique_model_name,
                                     "model_type": model_type_name,
                                     "family": family_name,
                                     "collection": collection_name,
                                     "variant": variant_name,
-                                    "unique_name": unique_model_name,
-                                    "aihpc_name": hpc_model_name,
-                                    "hpc_model_name": hpc_model_name,
-                                    "support_frame": [],
-                                    "model_category": config.get('model_category', ''),
-                                    "script_name": config.get('script_name', ''),
-                                    "tasks": str(config.get('tasks', '')) if config.get('tasks') is not None else '',
-                                    "base_model_name": config.get('base_model_name', ''),
+                                    "frameworks": []
                                 }
-                            model_entry = model_info_map[key]
+                            model_info_map[key]["frameworks"].append(framework_entry)
                         else:
-                            # Search existing entry
+                            # Search or create
                             model_entry = next(
-                                (m for m in model_info_map if m["unique_name"] == unique_model_name),
+                                (m for m in model_info_map if m["model_name"] == unique_model_name),
                                 None
                             )
-                            if model_entry is None:
+                            if not model_entry:
                                 model_entry = {
-                                    "model": f"{family_name}_{collection_name}-{variant_name}",
+                                    "model_name": unique_model_name,
                                     "model_type": model_type_name,
                                     "family": family_name,
                                     "collection": collection_name,
                                     "variant": variant_name,
-                                    "unique_name": unique_model_name,
-                                    "aihpc_name": hpc_model_name,
-                                    "hpc_model_name": hpc_model_name,
-                                    "support_frame": [],
-                                    "model_category": config.get('model_category', ''),
-                                    "script_name": config.get('script_name', ''),
-                                    "tasks": str(config.get('tasks', '')) if config.get('tasks') is not None else '',
-                                    "base_model_name": config.get('base_model_name', ''),
+                                    "frameworks": []
                                 }
                                 model_info_map.append(model_entry)
 
-                        # Add supported framework if present
-                        fw = config.get('supported_framework')
-                        if fw and fw not in model_entry['support_frame']:
-                            model_entry['support_frame'].append(fw)
+                            model_entry["frameworks"].append(framework_entry)
 
     return model_info_map
