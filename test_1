@@ -1,115 +1,21 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from typing import List, Optional
-from pydantic import BaseModel
-import yaml
-
-app = FastAPI(title="Model Catalog API")
-
-# --- Pydantic Models ---
-class ModelEntry(BaseModel):
-    model_type: str
-    family: str
-    collection: str
-    variant: str
-    unique_name: str
-    aihpc_name: str
-    support_frame: List[str]
-    model_category: Optional[str]
-    script_name: Optional[str]
-    tasks: Optional[str]
-    base_model_name: Optional[str]
-
-# --- Load Model Catalog ---
-def load_catalog(path="model_catalog.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
-
-model_catalog = load_catalog()
-
-# --- Flatten Nested Catalog ---
-def get_model_info(
-    model_catalog: Dict[str, Any],
-    allowed_model_list: Optional[List[str]] = None,
-    as_dict: bool = False
-) -> Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    models = {} if as_dict else []
-    
-    for model_type in model_catalog.get('model_type', []):
-        model_type_name = model_type.get('name', '')
-        for family in model_type.get('model_family', []):
-            family_name = family.get('name', '')
-            for collection in family.get('model_collection', []):
-                collection_name = collection.get('name', '')
-                for variant in family.get('model_collection', []):
-                    collection_name = collection.get('name', '')
-                    for variant in collection.get('variants', []):
-                        variant_name = variant.get('name', '')
-                        for config in variant.get('configs', []):
-                            hpc_model_name = config.get('hpc_model_name', '')
-                            
-                            if allowed_model_list and hpc_model_name not in allowed_model_list:
-                                continue
-                            
-                            model_data = {
-                                "model_type": model_type_name,
-                                "family": family_name,
-                                "collection": collection_name,
-                                "variant": variant_name,
-                                "unique_name": config.get('unique_model_name', ''),
-                                "aihpc_name": hpc_model_name,
-                                "support_frame": [config.get('supported_framework')] if config.get('supported_framework') else [],
-                                "model_category": config.get('model_category', ''),
-                                "script_name": config.get('script_name', ''),
-                                "tasks": config.get('tasks', ''),
-                                "base_model_name": config.get('base_model_name', '')
-                            }
-
-                            if as_dict:
-                                models[hpc_model_name] = model_data
-                            else:
-                                models.append(model_data)
-    
-    return models
-
-
-flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-
-# --- Endpoints ---
-@app.get("/models", response_model=List[ModelEntry])
-def get_models(
-    model_type: Optional[str] = Query(None),
-    family: Optional[str] = Query(None),
-    collection: Optional[str] = Query(None),
-    variant: Optional[str] = Query(None),
-    support_frame: Optional[str] = Query(None)
+@app.post("/evaluate", response_model=PolicyEvaluationResponse)
+async def evaluate_policy(
+    request: PolicyEvaluationRequest,
+    policy_path: str = Depends(authenticate_client)
 ):
-    """
-    List models (flat, filterable by type/family/collection/variant/support_frame).
-    """
-    result = flat_models
-    if model_type:
-        result = [m for m in result if m.model_type == model_type]
-    if family:
-        result = [m for m in result if m.family == family]
-    if collection:
-        result = [m for m in result if m.collection == collection]
-    if variant:
-        result = [m for m in result if m.variant == variant]
-    if support_frame:
-        result = [m for m in result if support_frame in m.support_frame]
-    return result
-
-@app.get("/models/raw")
-def get_models_raw():
-    """
-    Return full nested catalog as-is (raw YAML loaded to dict).
-    """
-    return JSONResponse(content=model_catalog)
-
-@app.post("/models/reload")
-def reload_models():
-    global model_catalog, flat_models
-    model_catalog = load_catalog()
-    flat_models = [ModelEntry(**m) for m in flatten_models(model_catalog)]
-    return {"status": "reloaded"}
+    """Evaluate input data against a specified Rego policy with client authentication via headers"""
+    
+    # Load YAML + extract allowed models
+    yaml_data = load_model_catalog()  # You can make the path configurable if needed
+    allowed_models = extract_allowed_models(yaml_data)
+    
+    # Inject allowed models into input_data
+    input_data = request.input_data.copy()
+    input_data["allowed_models"] = allowed_models
+    
+    # Write input file
+    input_file = "temp_input.json"
+    with open(input_file, "w") as f:
+        json.dump(input_data, f)
+    
+    # (rest of your subprocess logic unchanged)
