@@ -41,3 +41,47 @@ def flatten_models(node, allowed_model_list, ancestry=None, model_info_map=None)
             flatten_models(item, allowed_model_list, ancestry, model_info_map)
 
     return model_info_map
+=====================
+
+def flatten_models_to_list(node, ancestry=None, model_info_list=None):
+    if ancestry is None:
+        ancestry = {}
+    if model_info_list is None:
+        model_info_list = []
+
+    if isinstance(node, dict):
+        # If it's a config node (leaf)
+        if "unique_model_name" in node:
+            unique_model_name = node.get("unique_model_name", "")
+            hpc_model_name = node.get("hpc_model_name", "")
+            support_frame = [node.get("supported_framework")] if node.get("supported_framework") else []
+            entry = {
+                "model_type": ancestry.get("model_type", ""),
+                "family": ancestry.get("model_family", ""),
+                "collection": ancestry.get("model_collection", ""),
+                "variant": ancestry.get("variant", ""),
+                "unique_name": unique_model_name,
+                "aihpc_name": hpc_model_name,
+                "hpc_model_name": hpc_model_name,
+                "support_frame": support_frame,
+                "model_category": node.get("model_category", ""),
+                "script_name": node.get("script_name", ""),
+                "tasks": str(node.get("tasks", "")) if node.get("tasks") is not None else "",
+                "base_model_name": node.get("base_model_name", "")
+            }
+            model_info_list.append(entry)
+        else:
+            # Update ancestry for all levels that have a 'name'
+            for key, value in node.items():
+                new_ancestry = ancestry.copy()
+                if key in ("model_type", "model_family", "model_collection", "variants", "variant") and isinstance(node, dict) and "name" in node:
+                    new_ancestry[key] = node.get("name", "")
+                # Recurse for nested lists/dicts
+                if isinstance(value, (dict, list)):
+                    flatten_models_to_list(value, new_ancestry, model_info_list)
+
+    elif isinstance(node, list):
+        for item in node:
+            flatten_models_to_list(item, ancestry, model_info_list)
+
+    return model_info_list
