@@ -1,21 +1,31 @@
-@app.post("/evaluate", response_model=PolicyEvaluationResponse)
-async def evaluate_policy(
-    request: PolicyEvaluationRequest,
-    policy_path: str = Depends(authenticate_client)
-):
-    """Evaluate input data against a specified Rego policy with client authentication via headers"""
-    
-    # Load YAML + extract allowed models
-    yaml_data = load_model_catalog()  # You can make the path configurable if needed
-    allowed_models = extract_allowed_models(yaml_data)
-    
-    # Inject allowed models into input_data
-    input_data = request.input_data.copy()
-    input_data["allowed_models"] = allowed_models
-    
-    # Write input file
-    input_file = "temp_input.json"
-    with open(input_file, "w") as f:
-        json.dump(input_data, f)
-    
-    # (rest of your subprocess logic unchanged)
+def get_model_info(model_catalog, allowed_model_list=None):
+    model_info_map = {}
+    for model_type in model_catalog.get("model_type", []):
+        model_type_name = model_type.get("name", "")
+        for family in model_type.get("model_family", []):
+            family_name = family.get("name", "")
+            for collection in family.get("model_collection", []):
+                collection_name = collection.get("name", "")
+                for variant in collection.get("variants", []):
+                    variant_name = variant.get("name", "")
+                    for config in variant.get("configs", []):
+                        unique_model_name = config.get("unique_model_name", "")
+                        if allowed_model_list and unique_model_name not in allowed_model_list:
+                            continue
+                        framework_entry = {
+                            "supported_framework": config.get("supported_framework", ""),
+                            "tasks": str(config.get("tasks", "")) if config.get("tasks") is not None else "",
+                            "script_name": config.get("script_name", ""),
+                            "hpc_model_name": config.get("hpc_model_name", "")
+                        }
+                        if unique_model_name not in model_info_map:
+                            model_info_map[unique_model_name] = {
+                                "model_name": unique_model_name,
+                                "model_type": model_type_name,
+                                "family": family_name,
+                                "collection": collection_name,
+                                "variant": variant_name,
+                                "frameworks": []
+                            }
+                        model_info_map[unique_model_name]["frameworks"].append(framework_entry)
+    return model_info_map
