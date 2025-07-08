@@ -1,229 +1,42 @@
-def flatten_models(node, ancestry=None, allowed_model_list=None, model_info_map=None):
-    if ancestry is None:
-        ancestry = {}
-    if model_info_map is None:
-        model_info_map = {}
-
-    # Base case: config node (leaf)
-    if isinstance(node, dict) and "unique_model_name" in node:
-        unique_model_name = node.get("unique_model_name", "")
-        if allowed_model_list and unique_model_name not in allowed_model_list:
-            return model_info_map
-        framework_entry = {
-            k: (str(v) if k == "tasks" and v is not None else v)
-            for k, v in node.items()
-            if k in {"supported_framework", "tasks", "script_name", "hpc_model_name"}
-        }
-        if unique_model_name not in model_info_map:
-            model_info_map[unique_model_name] = {
-                "model_name": unique_model_name,
-                **ancestry,
-                "frameworks": []
-            }
-        model_info_map[unique_model_name]["frameworks"].append(framework_entry)
-        return model_info_map
-
-
-===========================
 def flatten_models(node, allowed_model_list, ancestry=None, model_info_map=None):
-    """
-    Recursively flattens a nested model catalog structure into a standardized format.
-    
-    Args:
-        node: Current node being processed (dict or list)
-        allowed_model_list: Optional list of allowed model names to include
-        ancestry: Dict tracking parent hierarchy (auto-populated during recursion)
-        model_info_map: Dict accumulating the final output (auto-populated)
-    
-    Returns:
-        Dict containing all models with their metadata and framework support
-        Format: {
-            "unique_model_name": {
-                "model_name": str,
-                "model_type": str,
-                "family": str,
-                "collection": str,
-                "variant": str,
-                "frameworks": [
-                    {
-                        "supported_framework": str,
-                        "tasks": str,
-                        "script_name": str,
-                        "hpc_model_name": str
-                    }
-                ]
-            }
-        }
-    """
-    # Initialize defaults
     if ancestry is None:
         ancestry = {}
     if model_info_map is None:
         model_info_map = {}
 
-    # Base case: Found a model configuration node
-    if isinstance(node, dict) and "unique_model_name" in node:
-        unique_model_name = node.get("unique_model_name")
-        if not unique_model_name:  # Skip if no name
-            return model_info_map
-        
-        # Apply allowlist filter if provided
-        if allowed_model_list and unique_model_name not in allowed_model_list:
-            return model_info_map
-        
-        # Standardize framework entry
-        framework_entry = {
-            "supported_framework": node.get("supported_framework", ""),
-            "tasks": str(node.get("tasks", "")) if node.get("tasks") is not None else "",
-            "script_name": node.get("script_name", ""),
-            "hpc_model_name": node.get("hpc_model_name", "")
-        }
-
-        # Initialize model entry if new
-        if unique_model_name not in model_info_map:
-            model_info_map[unique_model_name] = {
-                "model_name": unique_model_name,
-                **ancestry,  # Include all parent context
-                "frameworks": []
-            }
-        
-        # Add framework support
-        model_info_map[unique_model_name]["frameworks"].append(framework_entry)
-        return model_info_map
-
-    # Recursive case: Process nested structures
     if isinstance(node, dict):
-        new_ancestry = ancestry.copy()
-        
-        # Track hierarchy names (only for recognized organizational nodes)
-        hierarchy_keys = {
-            "model_type", "model_family", "model_collection", 
-            "variants", "variant", "family", "version"
-        }
-        
-        # Update ancestry with any named hierarchy levels
-        for key in hierarchy_keys:
-            if key in node:
-                new_ancestry[key] = node.get("name", node.get(key, ""))
-        
-        # Process all values in the dictionary
-        for value in node.values():
-            flatten_models(value, allowed_model_list, new_ancestry, model_info_map)
-    
-    elif isinstance(node, list):
-        for item in node:
-            flatten_models(item, allowed_model_list, ancestry, model_info_map)
-
-    return model_info_map
-
-    # Recursive case: dict (process children)
-    if isinstance(node, dict):
-        for key, value in node.items():
-            new_ancestry = ancestry.copy()
-            # Dynamically store label if the node has 'name'
-            if isinstance(node, dict) and "name" in node:
-                new_ancestry[key] = node.get("name", "")
-            if isinstance(value, list):
-                for item in value:
-                    flatten_models(item, new_ancestry, allowed_model_list, model_info_map)
-            elif isinstance(value, dict):
-                flatten_models(value, new_ancestry, allowed_model_list, model_info_map)
-    # Recursive case: list
-    elif isinstance(node, list):
-        for item in node:
-            flatten_models(item, ancestry, allowed_model_list, model_info_map)
-
-    return model_info_map
-=============================
-
-
-
-def flatten_models(node, allowed_model_list, ancestry=None, model_info_map=None):
-    """
-    Recursively flattens a nested model catalog structure into a standardized format.
-    
-    Args:
-        node: Current node being processed (dict or list)
-        allowed_model_list: Optional list of allowed model names to include
-        ancestry: Dict tracking parent hierarchy (auto-populated during recursion)
-        model_info_map: Dict accumulating the final output (auto-populated)
-    
-    Returns:
-        Dict containing all models with their metadata and framework support
-        Format: {
-            "unique_model_name": {
-                "model_name": str,
-                "model_type": str,
-                "family": str,
-                "collection": str,
-                "variant": str,
-                "frameworks": [
-                    {
-                        "supported_framework": str,
-                        "tasks": str,
-                        "script_name": str,
-                        "hpc_model_name": str
-                    }
-                ]
+        # Leaf node: unique_model_name means this is a model config
+        if "unique_model_name" in node:
+            unique_model_name = node.get("unique_model_name", "")
+            if allowed_model_list and unique_model_name not in allowed_model_list:
+                return model_info_map
+            framework_entry = {
+                "supported_framework": node.get("supported_framework", ""),
+                "tasks": str(node.get("tasks", "")) if node.get("tasks") is not None else "",
+                "script_name": node.get("script_name", ""),
+                "hpc_model_name": node.get("hpc_model_name", "")
             }
-        }
-    """
-    # Initialize defaults
-    if ancestry is None:
-        ancestry = {}
-    if model_info_map is None:
-        model_info_map = {}
+            if unique_model_name not in model_info_map:
+                model_info_map[unique_model_name] = {
+                    "model_name": unique_model_name,
+                    **ancestry,
+                    "frameworks": []
+                }
+            model_info_map[unique_model_name]["frameworks"].append(framework_entry)
+        else:
+            # Not a config leaf: walk all dict items
+            for key, value in node.items():
+                new_ancestry = ancestry.copy()
+                # Store 'name' field in ancestry for all hierarchy levels
+                if key in ("model_type", "model_family", "model_collection", "variants", "variant"):
+                    if isinstance(node, dict) and "name" in node:
+                        new_ancestry[key] = node.get("name", "")
+                # Recursively process lists/dicts
+                if isinstance(value, (dict, list)):
+                    flatten_models(value, allowed_model_list, new_ancestry, model_info_map)
 
-    # Base case: Found a model configuration node
-    if isinstance(node, dict) and "unique_model_name" in node:
-        unique_model_name = node.get("unique_model_name")
-        if not unique_model_name:  # Skip if no name
-            return model_info_map
-        
-        # Apply allowlist filter if provided
-        if allowed_model_list and unique_model_name not in allowed_model_list:
-            return model_info_map
-        
-        # Standardize framework entry
-        framework_entry = {
-            "supported_framework": node.get("supported_framework", ""),
-            "tasks": str(node.get("tasks", "")) if node.get("tasks") is not None else "",
-            "script_name": node.get("script_name", ""),
-            "hpc_model_name": node.get("hpc_model_name", "")
-        }
-
-        # Initialize model entry if new
-        if unique_model_name not in model_info_map:
-            model_info_map[unique_model_name] = {
-                "model_name": unique_model_name,
-                **ancestry,  # Include all parent context
-                "frameworks": []
-            }
-        
-        # Add framework support
-        model_info_map[unique_model_name]["frameworks"].append(framework_entry)
-        return model_info_map
-
-    # Recursive case: Process nested structures
-    if isinstance(node, dict):
-        new_ancestry = ancestry.copy()
-        
-        # Track hierarchy names (only for recognized organizational nodes)
-        hierarchy_keys = {
-            "model_type", "model_family", "model_collection", 
-            "variants", "variant", "family", "version"
-        }
-        
-        # Update ancestry with any named hierarchy levels
-        for key in hierarchy_keys:
-            if key in node:
-                new_ancestry[key] = node.get("name", node.get(key, ""))
-        
-        # Process all values in the dictionary
-        for value in node.values():
-            flatten_models(value, allowed_model_list, new_ancestry, model_info_map)
-    
     elif isinstance(node, list):
+        # For lists, just process each item
         for item in node:
             flatten_models(item, allowed_model_list, ancestry, model_info_map)
 
