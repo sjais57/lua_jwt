@@ -100,3 +100,28 @@ for entry in model_config_list:  # assuming this is your loaded list
         "tasks": entry.get("tasks", ""),
     })
 
+=======
+data = {"config": [ ... ]}  # your original JSON config
+
+response = {}
+
+for cfg in data["config"]:
+    model_name = cfg["unique_model_name"]
+    
+    if model_name not in response:
+        response[model_name] = {
+            "model_name": model_name,
+            "frameworks": []
+        }
+
+    response[model_name]["frameworks"].append({
+        "supported_framework": cfg["inference_type"],
+        "protocol": cfg["protocol"],
+        "script_name": cfg["script_name"],
+        "hpc_model_name": cfg["hpc_model_name"],
+        "tasks": cfg["tasks"]
+    })
+
+import json
+print(json.dumps(response, indent=2))
+
