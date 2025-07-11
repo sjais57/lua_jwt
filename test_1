@@ -85,3 +85,18 @@ def flatten_models_to_list(node, ancestry=None, model_info_list=None):
             flatten_models_to_list(item, ancestry, model_info_list)
 
     return model_info_list
+
+
+====================
+
+framework_entries = []
+
+for entry in model_config_list:  # assuming this is your loaded list
+    framework_entries.append({
+        "supported_framework": entry.get("inference_type", ""),
+        "protocol": entry.get("protocol", ""),
+        "script_name": entry.get("script_name", ""),
+        "hpc_model_name": entry.get("hpc_model_name", ""),
+        "tasks": entry.get("tasks", ""),
+    })
+
