@@ -1,0 +1,26 @@
+import re
+import yaml
+
+allowed_model = []
+pattern = r'allowed_models\s*:=\s*\[(.*?)\]'
+match = re.search(pattern, policy_content)
+
+if match:
+    models_str = match.group(1)
+    allowed_model_list = [
+        m.strip().strip('"').strip("'")
+        for m in models_str.split(",")
+        if m.strip()
+    ]
+
+    # yaml_path is the path to your YAML model catalog
+    for allowed_model_path in allowed_model_list:
+        model_info_map = get_model_map_info(yaml_path, allowed_model_path)
+        for model_name, model_details in model_info_map.items():
+            allowed_model.append({
+                "model": model_name,
+                **model_details
+            })
+
+# Now allowed_model will have the required data structure
+print(allowed_model)
