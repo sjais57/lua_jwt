@@ -1,99 +1,33 @@
-from typing import Dict, Any
-
-
 def get_model_map_info(allowed_path: str) -> Dict[str, Any]:
-    """
-    Walk a `#`-separated path (e.g. ``model_type#Foundation#...``) into the
-    catalog and return a dict grouped by ``unique_model_name`` with frameworks.
-    """
-    catalog = load_model_catalog()              # <-- no argument needed
+    catalog = load_model_catalog()
     subtree: Any = catalog
 
+    # Safely descend through the path
     for key in allowed_path.split("#"):
-        subtree = subtree[key]                  # assume path is valid
+        if not isinstance(subtree, dict):
+            return {}
+        subtree = subtree.get(key)
+        if subtree is None:
+            return {}
 
+    # If subtree is the configs list directly
+    configs = subtree if isinstance(subtree, list) else subtree.get("configs", [])
+    
     result: Dict[str, Any] = {}
-    for cfg in subtree.get("configs", []):
-        name = cfg["unique_model_name"]
-        if name not in result:
-            result[name] = {"model_name": name, "frameworks": []}
 
-        result[name]["frameworks"].append(
-            {
-                "supported_framework": f"{cfg.get('inference_type', '')}_{cfg.get('protocol', '')}",
-                "protocol": cfg.get("protocol", ""),
-                "script_name": cfg.get("script_name", ""),
-                "hpc_model_name": cfg.get("hpc_model_name", ""),
-                "tasks": cfg.get("tasks", ""),
-            }
-        )
+    for cfg in configs:
+        name = cfg.get("unique_model_name")
+        if not name:
+            continue
+        result.setdefault(name, {
+            "model_name": name,
+            "frameworks": []
+        })["frameworks"].append({
+            "supported_framework": f"{cfg.get('inference_type', '')}_{cfg.get('protocol', '')}",
+            "protocol": cfg.get("protocol", ""),
+            "script_name": cfg.get("script_name", ""),
+            "hpc_model_name": cfg.get("hpc_model_name", ""),
+            "tasks": cfg.get("tasks", ""),
+        })
 
     return result
-
-import re, json
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-
-router = APIRouter()
-
-@router.get("/user-policies")
-def get_user_policies():
-    # 1. Read policy file (or fetch from DB, etc.)
-    with open("user_policy.rego") as f:
-        policy_content = f.read()
-
-    # 2. Extract allowed model paths
-    pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
-    paths_raw = re.search(pattern, policy_content).group(1)
-    allowed_paths = [
-        p.strip().strip('"').strip("'")
-        for p in paths_raw.split(",")
-        if p.strip()
-    ]
-
-    # 3. Build response
-    allowed_model = []
-    for path in allowed_paths:
-        for model_name, model_data in get_model_map_info(path).items():
-            allowed_model.append({"model": model_name, **model_data})
-
-    return JSONResponse({"allowed_models": allowed_model})
-
-
-
-
-
-
-======================
-import re
-import json
-
-allowed_model_list = []
-
-# Extract allowed_models := [ "model_type#Foundation#..." ]
-pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
-match = re.search(pattern, policy_content)
-if match:
-    models_str = match.group(1)
-    allowed_model_list = [
-        m.strip().strip('"').strip("'")
-        for m in models_str.split(",")
-        if m.strip()
-    ]
-
-print("✅ Allowed hierarchical model paths:", allowed_model_list)
-
-# Call get_model_map_info() for each path
-allowed_model = []
-for model_path in allowed_model_list:
-    model_json = get_model_map_info(model_path)  # returns JSON string
-    if model_json:
-        parsed = json.loads(model_json)  # convert to dict
-        for model_name, model_data in parsed.items():
-            allowed_model.append({
-                "model": model_name,
-                **model_data
-            })
-
-print("✅ Final allowed_model output:")
-print(json.dumps(allowed_model, indent=2))
