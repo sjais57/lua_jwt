@@ -1,59 +1,52 @@
-def get_model_map_info(allowed_path: str) -> Dict[str, Any]:
+from typing import Dict, Any, List
+
+def get_model_map_info(allowed_paths: List[str]) -> List[Dict[str, Any]]:
     catalog = load_model_catalog()
-    subtree: Any = catalog
+    models: List[Dict[str, Any]] = []
 
-    # Safely descend through the path
-    for key in allowed_path.split("#"):
-        if not isinstance(subtree, dict):
-            return {}
-        subtree = subtree.get(key)
+    for path in allowed_paths:
+        subtree: Any = catalog
+        keys = path.split("#")
+        metadata = {}
+
+        for i, key in enumerate(keys):
+            if not isinstance(subtree, dict):
+                subtree = None
+                break
+            subtree = subtree.get(key)
+            if subtree is None:
+                break
+
+            # Collect metadata (we take key names from the path)
+            if i % 2 == 1:  # Value node
+                level = keys[i - 1]
+                metadata[level] = key
+
         if subtree is None:
-            return {}
-
-    # If subtree is the configs list directly
-    configs = subtree if isinstance(subtree, list) else subtree.get("configs", [])
-    
-    result: Dict[str, Any] = {}
-
-    for cfg in configs:
-        name = cfg.get("unique_model_name")
-        if not name:
             continue
-        result.setdefault(name, {
-            "model_name": name,
-            "frameworks": []
-        })["frameworks"].append({
-            "supported_framework": f"{cfg.get('inference_type', '')}_{cfg.get('protocol', '')}",
-            "protocol": cfg.get("protocol", ""),
-            "script_name": cfg.get("script_name", ""),
-            "hpc_model_name": cfg.get("hpc_model_name", ""),
-            "tasks": cfg.get("tasks", ""),
-        })
 
-    return result
+        # Handle configs or direct list
+        configs = subtree if isinstance(subtree, list) else subtree.get("configs", [])
+        for cfg in configs:
+            model_name = cfg.get("unique_model_name", "")
+            if not model_name:
+                continue
 
+            model_entry = {
+                "model": model_name,
+                "model_name": model_name,
+                **metadata,
+                "frameworks": []
+            }
 
+            framework_entry = {
+                "inference_type": f"{cfg.get('inference_type', '')}_{cfg.get('protocol', '')}",
+                "tasks": cfg.get("tasks", ""),
+                "script_name": cfg.get("script_name", ""),
+                "hpc_model_name": cfg.get("hpc_model_name", "")
+            }
 
+            model_entry["frameworks"].append(framework_entry)
+            models.append(model_entry)
 
-======
-# ── extract allowed_models from the Rego policy ──────────────────────────────
-pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
-match   = re.search(pattern, policy_content)
-allowed_model_list = [
-    s.strip().strip('"').strip("'")              # remove spaces + quotes
-    for s in match.group(1).split(",")           # comma-separated list
-    if s.strip()                                 # skip empty fragments
-]
-
-# ── build OpenAI-style response for each path ────────────────────────────────
-allowed_models = []
-for path in allowed_model_list:                  # ← each item is a full #-path
-    model_map = get_model_map_info(path)         # grouped by unique_model_name
-    for model_name, model_data in model_map.items():
-        allowed_models.append({
-            "model": model_name,
-            **model_data
-        })
-
-return JSONResponse({"allowed_models": allowed_models})
-
+    return models
