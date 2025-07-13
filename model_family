@@ -31,3 +31,15 @@ def get_model_map_info(allowed_path: str) -> Dict[str, Any]:
         })
 
     return result
+allowed_model = []
+
+for path in allowed_paths:
+    model_map = get_model_map_info(path)
+    if model_map:
+        for model_name, model_data in model_map.items():
+            allowed_model.append({
+                "model": model_name,
+                **model_data
+            })
+
+print(json.dumps(allowed_model, indent=2))
