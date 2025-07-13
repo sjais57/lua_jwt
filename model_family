@@ -1,81 +1,99 @@
-def get_model_info_for_user(model_families, allowed_models):
-    results = []
+from typing import Dict, Any
 
-    for family in model_families:
-        for model in family['models']:
-            model_name = model['name']
-            
-            if model_name in allowed_models:
-                # Return only supported frameworks
-                results.append({
-                    "model_name": model_name,
-                    "supported_frameworks": model['supported_frameworks']
-                })
-            else:
-                # Return entire model dict
-                results.append({
-                    "model_name": model_name,
-                    "full_model": model
-                })
 
-    return results
+def get_model_map_info(allowed_path: str) -> Dict[str, Any]:
+    """
+    Walk a `#`-separated path (e.g. ``model_type#Foundation#...``) into the
+    catalog and return a dict grouped by ``unique_model_name`` with frameworks.
+    """
+    catalog = load_model_catalog()              # <-- no argument needed
+    subtree: Any = catalog
 
-==============
-def get_model_or_frameworks(model_family, allowed_models):
-    result = {}
-    
-    # family_data = meta-llama data
-    for family_name, family_data in model_family.items():
-        print(f"Processing family: {family_name}")
-        
-        # version_data = Llama-3.1 data, Llama-3.3 data, trtllm data
-        for version_name, version_data in family_data.items():
-            print(f"  Processing version: {version_name}")
-            
-            # variant_data = 8B-Instruct dict, 70B-Instruct dict, etc.
-            for variant_name, variant_data in version_data.items():
-                print(f"    Processing variant: {variant_name}")
-                print(f"      Data: {variant_data}")
-                
-                aihpc_name = variant_data.get('aihpc_name')
-                print(f"      AIHPC Name: {aihpc_name}")
-                
-                if aihpc_name in allowed_models:
-                    print(f"Allowed model! Returning support_frame")
-                    result[aihpc_name] = variant_data.get('support_frame')
-                else:
-                    print(f"Not in allowed models. Returning full dict.")
-                    result[variant_data['unique_name']] = variant_data
-    
+    for key in allowed_path.split("#"):
+        subtree = subtree[key]                  # assume path is valid
+
+    result: Dict[str, Any] = {}
+    for cfg in subtree.get("configs", []):
+        name = cfg["unique_model_name"]
+        if name not in result:
+            result[name] = {"model_name": name, "frameworks": []}
+
+        result[name]["frameworks"].append(
+            {
+                "supported_framework": f"{cfg.get('inference_type', '')}_{cfg.get('protocol', '')}",
+                "protocol": cfg.get("protocol", ""),
+                "script_name": cfg.get("script_name", ""),
+                "hpc_model_name": cfg.get("hpc_model_name", ""),
+                "tasks": cfg.get("tasks", ""),
+            }
+        )
+
     return result
 
-==============
-The complete flow (with YAML reading + function use)
-import yaml
+import re, json
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
-# Load the YAML file
-with open("model_catalog.yaml") as f:
-    data = yaml.safe_load(f)
+router = APIRouter()
 
-# Get the model_family dict
-model_family = data["model_family"]
+@router.get("/user-policies")
+def get_user_policies():
+    # 1. Read policy file (or fetch from DB, etc.)
+    with open("user_policy.rego") as f:
+        policy_content = f.read()
 
-def get_supported_frameworks_by_aihpc_name(model_family, allowed_model):
-    for family_data in model_family.values():
-        for version_data in family_data.values():
-            for variant_data in version_data.values():
-                if variant_data.get('aihpc_name') == allowed_model:
-                    return variant_data.get('support_frame', [])
-    return None
+    # 2. Extract allowed model paths
+    pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
+    paths_raw = re.search(pattern, policy_content).group(1)
+    allowed_paths = [
+        p.strip().strip('"').strip("'")
+        for p in paths_raw.split(",")
+        if p.strip()
+    ]
 
-Usage:
-allowed_model = "meta-llama_Llama-3.3-70B-Instruct"
+    # 3. Build response
+    allowed_model = []
+    for path in allowed_paths:
+        for model_name, model_data in get_model_map_info(path).items():
+            allowed_model.append({"model": model_name, **model_data})
 
-frameworks = get_supported_frameworks_by_aihpc_name(model_family, allowed_model)
-
-if frameworks:
-    print(f"Supported frameworks for {allowed_model}: {frameworks}")
-else:
-    print(f"{allowed_model} not found!")
+    return JSONResponse({"allowed_models": allowed_model})
 
 
+
+
+
+
+======================
+import re
+import json
+
+allowed_model_list = []
+
+# Extract allowed_models := [ "model_type#Foundation#..." ]
+pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
+match = re.search(pattern, policy_content)
+if match:
+    models_str = match.group(1)
+    allowed_model_list = [
+        m.strip().strip('"').strip("'")
+        for m in models_str.split(",")
+        if m.strip()
+    ]
+
+print("✅ Allowed hierarchical model paths:", allowed_model_list)
+
+# Call get_model_map_info() for each path
+allowed_model = []
+for model_path in allowed_model_list:
+    model_json = get_model_map_info(model_path)  # returns JSON string
+    if model_json:
+        parsed = json.loads(model_json)  # convert to dict
+        for model_name, model_data in parsed.items():
+            allowed_model.append({
+                "model": model_name,
+                **model_data
+            })
+
+print("✅ Final allowed_model output:")
+print(json.dumps(allowed_model, indent=2))
