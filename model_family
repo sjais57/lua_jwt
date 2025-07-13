@@ -31,15 +31,29 @@ def get_model_map_info(allowed_path: str) -> Dict[str, Any]:
         })
 
     return result
-allowed_model = []
 
-for path in allowed_paths:
-    model_map = get_model_map_info(path)
-    if model_map:
-        for model_name, model_data in model_map.items():
-            allowed_model.append({
-                "model": model_name,
-                **model_data
-            })
 
-print(json.dumps(allowed_model, indent=2))
+
+
+======
+# ── extract allowed_models from the Rego policy ──────────────────────────────
+pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
+match   = re.search(pattern, policy_content)
+allowed_model_list = [
+    s.strip().strip('"').strip("'")              # remove spaces + quotes
+    for s in match.group(1).split(",")           # comma-separated list
+    if s.strip()                                 # skip empty fragments
+]
+
+# ── build OpenAI-style response for each path ────────────────────────────────
+allowed_models = []
+for path in allowed_model_list:                  # ← each item is a full #-path
+    model_map = get_model_map_info(path)         # grouped by unique_model_name
+    for model_name, model_data in model_map.items():
+        allowed_models.append({
+            "model": model_name,
+            **model_data
+        })
+
+return JSONResponse({"allowed_models": allowed_models})
+
