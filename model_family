@@ -53,25 +53,17 @@ def get_model_map_info(allowed_paths: List[str]) -> List[Dict[str, Any]]:
 ===================
 
 import re
-from fastapi.responses import JSONResponse
 
-def user_policies_endpoint(policy_content: str):
-    # --- 1. Extract allowed_models := ["..."] from Rego ---
-    pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
-    match = re.search(pattern, policy_content)
-
-    allowed_paths = []
-    if match:
-        raw = match.group(1)
-        allowed_paths = [
-            p.strip().strip('"').strip("'")
-            for p in raw.split(",")
-            if p.strip()
-        ]
-
-    # --- 2. Use the updated function to get resolved models ---
-    models = get_model_map_info(allowed_paths)  # accepts list
-
-    # --- 3. Return OpenAI-style model metadata ---
-    return JSONResponse({"allowed_models": models})
+pattern = r'allowed_models\s*[:=]+\s*\[(.*?)\]'
+match = re.search(pattern, policy_content, re.DOTALL)
+if match:
+    models_str = match.group(1)
+    # Find all quoted strings
+    allowed_models = re.findall(r'["\']([^"\']+)["\']', models_str)
+    print(f"Allowed_model_list from rego file: {allowed_models}")
+    model_map_info = get_model_map_info(allowed_models)
+    print(f"Model tree information: {model_map_info}")
+    return JSONResponse({"allowed_models": model_map_info})
+else:
+    return JSONResponse({"allowed_models": []})
 
