@@ -50,3 +50,28 @@ def get_model_map_info(allowed_paths: List[str]) -> List[Dict[str, Any]]:
             models.append(model_entry)
 
     return models
+===================
+
+import re
+from fastapi.responses import JSONResponse
+
+def user_policies_endpoint(policy_content: str):
+    # --- 1. Extract allowed_models := ["..."] from Rego ---
+    pattern = r'allowed_models\s*:=\s*\[\s*([^\]]+)\]'
+    match = re.search(pattern, policy_content)
+
+    allowed_paths = []
+    if match:
+        raw = match.group(1)
+        allowed_paths = [
+            p.strip().strip('"').strip("'")
+            for p in raw.split(",")
+            if p.strip()
+        ]
+
+    # --- 2. Use the updated function to get resolved models ---
+    models = get_model_map_info(allowed_paths)  # accepts list
+
+    # --- 3. Return OpenAI-style model metadata ---
+    return JSONResponse({"allowed_models": models})
+
