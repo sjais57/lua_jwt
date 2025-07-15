@@ -67,10 +67,20 @@ else:
     return JSONResponse({"allowed_models": []})
 # ---------------------------------------------------------------------
 
-# Extract allowed_models (with # symbols preserved)
-allowed_models_match = re.search(r'allowed_models\s*:=\s*\[(.*?)\]', policy_content, re.DOTALL)
-if allowed_models_match:
-    models_str = allowed_models_match.group(1)
-    allowed_models = [m.strip().strip('"') for m in re.findall(r'"([^"]+)"', models_str)]
-    policy_info["allowed_models"] = allowed_models
+import ast
+import re
+
+pattern = r'allowed_models\s*:=\s*(\[[^\]]*\])'  # ← allows ] inside quoted strings
+match = re.search(pattern, policy_content, re.DOTALL)
+
+if match:
+    try:
+        allowed_models = ast.literal_eval(match.group(1))
+        print("✅ Parsed allowed_models:", allowed_models)
+    except Exception as e:
+        print("❌ Parsing error:", str(e))
+        allowed_models = []
+else:
+    allowed_models = []
+
 
