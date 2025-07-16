@@ -1,0 +1,37 @@
++------------------+        +------------------+         +-------------------+
+|    Clients       | -----> |   APISIX Gateway | ----->  |   Upstream APIs   |
+| (Mobile, Web,    |        | (NGINX+LuaJIT)   |         | (Microservices,   |
+|  Other Services) |        |                  |         |  Legacy Apps)     |
++------------------+        +------------------+         +-------------------+
+                                   |
+                +------------------+----------------------+
+                |     Plugins Layer (Auth, Rate Limit,    |
+                |      Logging, Caching, etc.)            |
+                +------------------+----------------------+
+                                   |
+                         +---------+----------+
+                         |    etcd Cluster    |  (Configuration storage)
+                         +--------------------+
+                                   |
+                         +---------+----------+
+                         |  Monitoring &      |
+                         |  Observability     |
+                         | (Prometheus, Grafana, Zipkin)
+                         +--------------------+
+
+
+====================================
+
+curl http://127.0.0.1:9180/apisix/admin/routes/1 \
+  -X PUT \
+  -d '{
+        "uri": "/hello",
+        "upstream": {
+          "type": "roundrobin",
+          "nodes": {
+            "127.0.0.1:1980": 1
+          }
+        }
+      }' \
+  -H "X-API-KEY: <your-admin-api-key>"
+========================================================
