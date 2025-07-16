@@ -106,3 +106,40 @@ end
   }
 }
 
+================
+
+         +---------------------+
+         |      Clients        |
+         +---------------------+
+                    |
+                    v
+      +------------------------------+
+      |        APISIX Gateway        |
+      |    (Nginx + LuaJIT engine)   |
+      +--------------+---------------+
+                     |
+    +----------------+------------------------+
+    |        |         |            |         |
+    v        v         v            v         v
+[Plugins] [Routes] [Consumers] [Upstreams] [Admin API]
+ (Auth,    (Path    (API         (Service     (REST API for
+  Rate      &        users/       Discovery,   config via
+ Limit,    method    apps)        Load Bal,    etcd)
+Log, etc.) match)                HealthChk)
+    |                                       |
+    +---------------------------------------+
+                    |
+                    v
+          +----------------------+
+          |   Backend Services   |
+          |  (Microservices,     |
+          |   Legacy APIs, etc.) |
+          +----------------------+
+                    |
+                    v
+        +---------------------------+
+        |  Observability & Logging  |
+        | (Prometheus, Grafana,     |
+        |  Zipkin, etc.)            |
+        +---------------------------+
+
