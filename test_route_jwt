@@ -1,28 +1,21 @@
-"functions": [
-  "return function(conf, ctx)\n" +
-  "  local cjson = require('cjson.safe')\n" +
-  "  local jwt = require('resty.jwt')\n" +
-  "  local auth_header = ngx.var.http_authorization\n" +
-  "  if not auth_header then return end\n" +
-  "  local token = auth_header:match(\"Bearer%s+(.+)\")\n" +
-  "  if not token then return end\n" +
-  "  local decoded = jwt:load_jwt(token)\n" +
-  "  local claims = decoded and decoded.payload or {}\n" +
-  "  local configs = claims.configs or {}\n" +
-  "  \n" +
-  "  -- Get first key under 'configs'\n" +
-  "  local dynamic_group\n" +
-  "  for k, v in pairs(configs) do\n" +
-  "    dynamic_group = v\n" +
-  "    break\n" +
-  "  end\n" +
-  "  \n" +
-  "  local config_names = dynamic_group and dynamic_group.configuration_name or {}\n" +
-  "  \n" +
-  "  ngx.req.read_body()\n" +
-  "  local body_data = ngx.req.get_body_data()\n" +
-  "  local body_json = cjson.decode(body_data or '{}') or {}\n" +
-  "  body_json['configuration_name'] = config_names\n" +
-  "  ngx.req.set_body_data(cjson.encode(body_json))\n" +
-  "end"
-]
+curl http://127.0.0.1:9180/apisix/admin/routes/1 \
+-H 'X-API-KEY: your-admin-key' -X PUT -d '
+{
+  "uri": "/api/*",
+  "plugins": {
+    "jwt-auth": {
+      "claim_headers": {
+        "active_group": "x-jwt-claim-activegroup",
+        "configs": "x-jwt-claim-configs"
+      }
+    },
+    "request-transformer": {
+      "body": {
+        "set": {
+          # Use the active group from JWT to dynamically construct the path
+          "config": "{{parse_json(header_x-jwt-claim-configs)[header_x-jwt-claim-activegroup].configuration_name[0]}}"
+        }
+      }
+    }
+  }
+}'
