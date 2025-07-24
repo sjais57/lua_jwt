@@ -1,0 +1,37 @@
+curl http://127.0.0.1:9180/apisix/admin/routes/1 \
+-H 'X-API-KEY: your-admin-key' \
+-X PUT -d '
+{
+  "uri": "/api/configurable",
+  "name": "configurable-endpoint",
+  "plugins": {
+    "jwt-auth": {
+      "key": "your-jwt-secret-key",
+      "algorithm": "HS256"
+    },
+    "serverless-pre-function": {
+      "phase": "rewrite",
+      "functions": [
+        "local core = require('apisix.core')",
+        "local jwt_configs = core.request.header(ctx, 'x-jwt-claim-configs')",
+        "if jwt_configs then",
+        "  local config_list = core.json.decode(jwt_configs)",
+        "  local body = core.request.get_body() or {}",
+        "  if type(body) == 'string' and body ~= '' then",
+        "    body = core.json.decode(body)",
+        "  elseif type(body) ~= 'table' then",
+        "    body = {}",
+        "  end",
+        "  body.config = config_list[1]",
+        "  core.request.set_body(core.json.encode(body))",
+        "end"
+      ]
+    }
+  },
+  "upstream": {
+    "type": "roundrobin",
+    "nodes": {
+      "configurable-service:7000": 1
+    }
+  }
+}'
