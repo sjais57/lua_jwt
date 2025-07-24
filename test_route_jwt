@@ -4,28 +4,36 @@ from typing import List, Dict, Any
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_user_category(user_configs: List[str], lookup_mode: str = 'FIRST_MATCH', **kwargs) -> Dict[str, Any]:
+def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH', **kwargs) -> Dict[str, Any]:
     """
-    Assign user to a category based on 'configs' field in metadata and lookup mode.
+    Assign user to a category based on group membership and lookup mode.
 
     Args:
-        user_configs: List of configs associated with the user (e.g., from claims["configuration_name"])
-        lookup_mode: 'FIRST_MATCH', 'ALL_MATCHES', or 'TIERED_MATCH'
-        metadata: (kwarg) metadata dictionary (apikey config format)
-    Returns:
-        Dict with category assignment result
-    """
-    logger.info(f"Assigning user category for configs: {user_configs} with mode: {lookup_mode}")
-    metadata = kwargs.get('metadata', {})
+        user_groups: List of groups the user belongs to
+        lookup_mode: Matching strategy
+        kwargs: expects 'metadata' containing 'categories'
     
-    if not metadata:
-        logger.warning("No metadata provided")
-        return {"categories": [], "match_mode": lookup_mode, "reason": "No metadata provided"}
+    Returns:
+        Dict with assigned category or categories
+    """
+    logger.info(f"Assigning user category for groups: {user_groups} with mode: {lookup_mode}")
+
+    metadata = kwargs.get('metadata', {})
+    categories = metadata.get('categories', {})
+
+    if not categories:
+        logger.warning("No categories found in metadata")
+        return {
+            "category": None,
+            "match_mode": lookup_mode,
+            "reason": "No categories in metadata"
+        }
 
     matches = []
-    for cat_name, cat_data in metadata.items():
-        cat_configs = cat_data.get('configs', [])
-        if any(conf in user_configs for conf in cat_configs):
+    for cat_name, cat_data in categories.items():
+        cat_groups = cat_data.get('groups', [])
+        if any(group in user_groups for group in cat_groups):
+            logger.info(f"Matched category: {cat_name}")
             matches.append({"name": cat_name, **cat_data})
 
     if lookup_mode == 'FIRST_MATCH':
