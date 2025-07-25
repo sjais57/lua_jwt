@@ -1,66 +1,45 @@
-import logging
-from typing import List, Dict, Any
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH', **kwargs) -> Dict[str, Any]:
-    """
-    Assign user to a category based on group membership and lookup mode.
-
-    Args:
-        user_groups: List of groups the user belongs to
-        lookup_mode: Matching strategy
-        kwargs: expects 'metadata' containing 'categories'
-    
-    Returns:
-        Dict with assigned category or categories
-    """
-    logger.info(f"Assigning user category for groups: {user_groups} with mode: {lookup_mode}")
-
-    metadata = kwargs.get('metadata', {})
-    categories = metadata.get('categories', {})
-
-    if not categories:
-        logger.warning("No categories found in metadata")
-        return {
-            "category": None,
-            "match_mode": lookup_mode,
-            "reason": "No categories in metadata"
-        }
-
-    matches = []
-    for cat_name, cat_data in categories.items():
-        cat_groups = cat_data.get('groups', [])
-        if any(group in user_groups for group in cat_groups):
-            logger.info(f"Matched category: {cat_name}")
-            matches.append({"name": cat_name, **cat_data})
-
-    if lookup_mode == 'FIRST_MATCH':
-        return {
-            "category": matches[0] if matches else None,
-            "match_mode": lookup_mode,
-            "reason": None if matches else "No match"
-        }
-
-    elif lookup_mode == 'ALL_MATCHES':
-        return {
-            "categories": matches,
-            "match_mode": lookup_mode
-        }
-
-    elif lookup_mode == 'TIERED_MATCH':
-        best = max(matches, key=lambda x: x.get('tier', 0), default=None)
-        return {
-            "category": best,
-            "match_mode": lookup_mode,
-            "reason": None if best else "No match"
-        }
-
-    else:
-        logger.warning(f"Unknown lookup_mode: {lookup_mode}")
-        return {
-            "categories": matches,
-            "match_mode": lookup_mode,
-            "reason": "Unknown lookup_mode"
-        }
+curl -X PUT 'http://<APISIX_ADMIN_IP>:<PORT>/apisix/admin/routes/1' \
+-H 'X-API-KEY: <YOUR_API_KEY>' \
+-H 'Content-Type: application/json' \
+-d '{
+  "uri": "/get-config-names",
+  "plugins": {
+    "jwt-auth": {
+      "key": "your_key_name",
+      "secret": "your_jwt_secret",
+      "payload": {
+        "iss": "your_issuer"
+      }
+    },
+    "serverless-pre-function": {
+      "phase": "rewrite",
+      "functions": [
+        "return function(conf, ctx)
+            local jwt = require('resty.jwt')
+            local token = ctx.var.http_authorization and ctx.var.http_authorization:match('Bearer%s+(.+)')
+            if not token then
+                return 401, {message = 'Missing JWT token'}
+            end
+            
+            local jwt_obj = jwt:load_jwt(token)
+            if not jwt_obj.valid then
+                return 401, {message = 'Invalid JWT token'}
+            end
+            
+            -- Extract configuration names from JWT payload
+            local config_names = jwt_obj.payload.config_names or {}
+            
+            -- Set the config names in header or variable for upstream
+            ngx.req.set_header('X-Config-Names', table.concat(config_names, ','))
+            ngx.var.config_names = table.concat(config_names, ',')
+        end"
+      ]
+    }
+  },
+  "upstream": {
+    "type": "roundrobin",
+    "nodes": {
+      "<UPSTREAM_SERVICE>": 1
+    }
+  }
+}'
