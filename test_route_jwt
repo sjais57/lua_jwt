@@ -1,37 +1,127 @@
+# apisix_route.yaml
+uri: /api/forwarded-endpoint
+methods: [POST]
+plugins:
+  jwt-auth:
+    # No config needed if using default
+  serverless-pre-function:
+    phase: rewrite
+    functions:
+      - |
+        function main(conf, ctx)
+          local cjson = require("cjson.safe")
+          local jwt_claims = ctx.var.jwt_claims
+          if jwt_claims then
+              local claims = cjson.decode(jwt_claims)
+              local config_names = claims["configuration_names"] or {}
+
+              ngx.req.read_body()
+              local body = ngx.req.get_body_data()
+              local new_body = {}
+
+              if body then
+                  new_body = cjson.decode(body) or {}
+              end
+
+              -- Inject configuration_names
+              new_body["configuration_names"] = config_names
+
+              -- Set new request body
+              local final_body = cjson.encode(new_body)
+              ngx.req.set_body_data(final_body)
+
+              -- Set content-type if needed
+              ngx.req.set_header("Content-Type", "application/json")
+              ngx.req.set_header("Content-Length", #final_body)
+          end
+        end
+upstream:
+  type: roundrobin
+  nodes:
+    "http://127.0.0.1:8000": 1  # your upstream service
+
+
+
+=========================
+
 curl -X PUT 'http://<APISIX_ADMIN_IP>:<PORT>/apisix/admin/routes/1' \
 -H 'X-API-KEY: <YOUR_API_KEY>' \
 -H 'Content-Type: application/json' \
 -d '{
-  "uri": "/get-config-names",
+  "uri": "/api/data",
   "plugins": {
     "jwt-auth": {
-      "key": "your_key_name",
-      "secret": "your_jwt_secret",
-      "payload": {
-        "iss": "your_issuer"
-      }
+      "header": "Authorization",
+      "algorithm": "RS256",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMIIBI...\n-----END PUBLIC KEY-----",
+      "iss": "your-issuer",
+      "aud": "your-audience"
     },
     "serverless-pre-function": {
       "phase": "rewrite",
       "functions": [
         "return function(conf, ctx)
+            -- Extract and validate JWT
             local jwt = require('resty.jwt')
-            local token = ctx.var.http_authorization and ctx.var.http_authorization:match('Bearer%s+(.+)')
+            local token = ngx.var.http_Authorization or ngx.var.arg_jwt or ngx.var.cookie_jwt
             if not token then
-                return 401, {message = 'Missing JWT token'}
+                ngx.status = 401
+                ngx.header.content_type = 'application/json'
+                ngx.say('{\"error\":\"Missing JWT token\"}')
+                ngx.exit(401)
             end
             
+            -- Remove 'Bearer ' prefix if present
+            token = token:gsub('^[Bb]earer%s+', '')
+            
+            -- Verify JWT (APISIX already did this, but we're double-checking)
             local jwt_obj = jwt:load_jwt(token)
             if not jwt_obj.valid then
-                return 401, {message = 'Invalid JWT token'}
+                ngx.status = 401
+                ngx.header.content_type = 'application/json'
+                ngx.say('{\"error\":\"Invalid JWT token\"}')
+                ngx.exit(401)
             end
             
-            -- Extract configuration names from JWT payload
-            local config_names = jwt_obj.payload.config_names or {}
+            -- Store claims in context
+            ngx.ctx.jwt_payload = jwt_obj.payload
+            ngx.ctx.extracted_claims = {
+                sub = jwt_obj.payload.sub,
+                config_names = jwt_obj.payload.config_names,
+                department = jwt_obj.payload.department
+            }
+        end"
+      ]
+    },
+    "serverless-post-function": {
+      "phase": "body_filter",
+      "functions": [
+        "return function(conf, ctx)
+            -- Only process if we have JWT data
+            if not ngx.ctx.jwt_payload then return end
             
-            -- Set the config names in header or variable for upstream
-            ngx.req.set_header('X-Config-Names', table.concat(config_names, ','))
-            ngx.var.config_names = table.concat(config_names, ',')
+            -- Get the response body
+            local resp_body = ngx.arg[1]
+            if not resp_body or #resp_body == 0 then
+                resp_body = '{}'
+            end
+            
+            -- Parse the existing body
+            local cjson = require('cjson')
+            local ok, original_data = pcall(cjson.decode, resp_body)
+            if not ok then
+                original_data = {original_body = resp_body}
+            end
+            
+            -- Create enhanced response
+            local enhanced_response = {
+                jwt_data = ngx.ctx.jwt_payload,
+                extracted_claims = ngx.ctx.extracted_claims,
+                original_data = original_data
+            }
+            
+            -- Set the new body
+            ngx.arg[1] = cjson.encode(enhanced_response)
         end"
       ]
     }
@@ -39,7 +129,7 @@ curl -X PUT 'http://<APISIX_ADMIN_IP>:<PORT>/apisix/admin/routes/1' \
   "upstream": {
     "type": "roundrobin",
     "nodes": {
-      "<UPSTREAM_SERVICE>": 1
+      "your-backend-service:8080": 1
     }
   }
 }'
