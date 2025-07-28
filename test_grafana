@@ -27,3 +27,44 @@ org_role = "Editor"
 [[servers.group_mappings]]
 group_dn = "*"
 org_role = "Viewer"
+
+
+=========================================
+#!/bin/bash
+
+# Fetch the LDAP password from Vault
+LDAP_PASSWORD=$(vault kv get -field=bind_password secret/grafana/ldap)
+
+if [ -z "$LDAP_PASSWORD" ]; then
+  echo "Failed to fetch bind_password from Vault"
+  exit 1
+fi
+
+# Generate the ldap.toml configuration
+cat <<EOF > /etc/grafana/ldap.toml
+[[servers]]
+host = "ldap.example.com"
+port = 389
+use_ssl = false
+start_tls = true
+ssl_skip_verify = true
+
+bind_dn = "cn=admin,dc=example,dc=com"
+bind_password = "$LDAP_PASSWORD"
+
+search_filter = "(uid=%s)"
+search_base_dns = ["ou=users,dc=example,dc=com"]
+
+[[servers.group_mappings]]
+group_dn = "cn=grafana-admins,ou=groups,dc=example,dc=com"
+org_role = "Admin"
+
+[[servers.group_mappings]]
+group_dn = "*"
+org_role = "Viewer"
+EOF
+
+# Set permissions
+chown grafana:grafana /etc/grafana/ldap.toml
+chmod 600 /etc/grafana/ldap.toml
+
