@@ -1,27 +1,54 @@
 [[servers]]
-host = "ad.example.com"
-port = 389
-use_ssl = false
-start_tls = true
+# Active Directory Connection Settings
+host = "your-ad-server.example.com"  # Replace with your AD server
+port = 389                          # Standard LDAP port (use 636 for LDAPS)
+use_ssl = false                     # Set to true for LDAPS (port 636)
+start_tls = true                    # Recommended for security
+ssl_skip_verify = false             # Set true only for self-signed certs
 
-bind_dn = "CN=grafana-bind,OU=ServiceAccounts,DC=example,DC=com"
-bind_password = "MySecurePassword123"  # or use vault injection
+# Service Account (Bind DN) - Must have read access to AD
+bind_dn = "CN=grafana-service,OU=Service Accounts,DC=example,DC=com"
+bind_password = "your-strong-password"
 
-search_filter = "(sAMAccountName=%s)"
-search_base_dns = ["OU=Users,DC=example,DC=com"]
+# User Search Configuration
+search_base_dns = ["DC=example,DC=com"]  # Base DN where users are stored
+search_filter = "(sAMAccountName=%s)"    # Standard AD username filter
 
-group_search_filter = "(&(objectClass=group)(member=%s))"
-group_search_filter_user_attribute = "dn"
-group_search_base_dns = ["OU=Groups,DC=example,DC=com"]
+# Attribute Mapping (AD → Grafana)
+[servers.attributes]
+name = "givenName"        # First name
+surname = "sn"           # Last name
+username = "sAMAccountName"  # AD username (e.g., jsmith)
+member_of = "memberOf"   # AD group membership attribute
+email = "mail"           # Email attribute in AD
+
+# Group Mappings (AD Groups → Grafana Roles)
+[[servers.group_mappings]]
+group_dn = "CN=Grafana-Admins,OU=Groups,DC=example,DC=com"
+org_role = "Admin"       # Full access (manage dashboards, users, etc.)
 
 [[servers.group_mappings]]
-group_dn = "CN=GrafanaAdmins,OU=Groups,DC=example,DC=com"
-org_role = "Admin"
+group_dn = "CN=Grafana-Editors,OU=Groups,DC=example,DC=com"
+org_role = "Editor"      # Can edit dashboards but not admin rights
 
 [[servers.group_mappings]]
-group_dn = "CN=GrafanaEditors,OU=Groups,DC=example,DC=com"
-org_role = "Editor"
+group_dn = "CN=Grafana-Viewers,OU=Groups,DC=example,DC=com"
+org_role = "Viewer"      # Read-only access
 
+# Fallback role (if user is authenticated but not in any mapped group)
 [[servers.group_mappings]]
-group_dn = "*"
-org_role = "Viewer"
+group_dn = "*"           # Wildcard for all other users
+org_role = "Viewer"      # Default role (adjust as needed)
+
+
+
+
+====================
+Validate LDAP Connection
+
+ldapsearch -x -H ldap://your-ad-server.example.com -D "CN=grafana-service,OU=Service Accounts,DC=example,DC=com" -W -b "DC=example,DC=com" "(sAMAccountName=testuser)"
+
+
+Sync Users Manually
+grafana-cli admin ldap-sync --help
+grafana-cli admin ldap-sync
