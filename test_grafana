@@ -52,3 +52,43 @@ ldapsearch -x -H ldap://your-ad-server.example.com -D "CN=grafana-service,OU=Ser
 Sync Users Manually
 grafana-cli admin ldap-sync --help
 grafana-cli admin ldap-sync
+
+
+
+=======================
+[[servers]]
+# Active Directory server connection
+host = "your-ad-server.example.com"
+port = 389
+use_ssl = false
+start_tls = true  # Recommended for security with AD
+ssl_skip_verify = false  # Set to true only for self-signed certificates
+
+# Service account for binding (read-only access recommended)
+bind_dn = "CN=grafana-service,OU=Service Accounts,DC=example,DC=com"
+bind_password = "your_service_account_password"
+
+# User search configuration
+search_base_dns = ["DC=example,DC=com"]
+search_filter = "(&(objectCategory=person)(objectClass=user)(sAMAccountName=%s)(memberOf=CN=Grafana-Users,OU=Groups,DC=example,DC=com))"
+
+# Attribute mapping
+[servers.attributes]
+name = "givenName"
+surname = "sn"
+username = "sAMAccountName"  # Standard AD username attribute
+member_of = "memberOf"
+email = "mail"
+
+# Group to role mapping
+[[servers.group_mappings]]
+group_dn = "CN=Grafana-Admins,OU=Groups,DC=example,DC=com"
+org_role = "Admin"
+
+[[servers.group_mappings]]
+group_dn = "CN=Grafana-Editors,OU=Groups,DC=example,DC=com"
+org_role = "Editor"
+
+[[servers.group_mappings]]
+group_dn = "*"  # Default role for all authenticated users
+org_role = "Viewer"
