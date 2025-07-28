@@ -1,65 +1,27 @@
 [[servers]]
-host = "your.ad.server.com"
-port = 389
-use_ssl = false         # Set to true if using LDAPS
-start_tls = true        # Use STARTTLS for security
-ssl_skip_verify = false # Set true if using self-signed certs
-
-bind_dn = "cn=ldap-reader,cn=Users,dc=yourdomain,dc=com"
-bind_password = "fetched-from-vault"  # This will be injected via script
-
-search_filter = "(sAMAccountName=%s)"
-search_base_dns = ["cn=Users,dc=yourdomain,dc=com"]
-
-# Optional group-to-role mapping (if you're using AD groups)
-group_search_base_dns = ["dc=yourdomain,dc=com"]
-group_search_filter = "(&(objectClass=group)(member=%s))"
-group_search_filter_user_attribute = "distinguishedName"
-
-[[servers.group_mappings]]
-group_dn = "cn=grafana-admins,cn=Users,dc=yourdomain,dc=com"
-org_role = "Admin"
-
-[[servers.group_mappings]]
-group_dn = "*"
-org_role = "Viewer"
-
-=========================================
-#!/bin/bash
-
-# Fetch the LDAP password from Vault
-LDAP_PASSWORD=$(vault kv get -field=bind_password secret/grafana/ldap)
-
-if [ -z "$LDAP_PASSWORD" ]; then
-  echo "Failed to fetch bind_password from Vault"
-  exit 1
-fi
-
-# Generate the ldap.toml configuration
-cat <<EOF > /etc/grafana/ldap.toml
-[[servers]]
-host = "ldap.example.com"
+host = "ad.example.com"
 port = 389
 use_ssl = false
 start_tls = true
-ssl_skip_verify = true
 
-bind_dn = "cn=admin,dc=example,dc=com"
-bind_password = "$LDAP_PASSWORD"
+bind_dn = "CN=grafana-bind,OU=ServiceAccounts,DC=example,DC=com"
+bind_password = "MySecurePassword123"  # or use vault injection
 
-search_filter = "(uid=%s)"
-search_base_dns = ["ou=users,dc=example,dc=com"]
+search_filter = "(sAMAccountName=%s)"
+search_base_dns = ["OU=Users,DC=example,DC=com"]
+
+group_search_filter = "(&(objectClass=group)(member=%s))"
+group_search_filter_user_attribute = "dn"
+group_search_base_dns = ["OU=Groups,DC=example,DC=com"]
 
 [[servers.group_mappings]]
-group_dn = "cn=grafana-admins,ou=groups,dc=example,dc=com"
+group_dn = "CN=GrafanaAdmins,OU=Groups,DC=example,DC=com"
 org_role = "Admin"
+
+[[servers.group_mappings]]
+group_dn = "CN=GrafanaEditors,OU=Groups,DC=example,DC=com"
+org_role = "Editor"
 
 [[servers.group_mappings]]
 group_dn = "*"
 org_role = "Viewer"
-EOF
-
-# Set permissions
-chown grafana:grafana /etc/grafana/ldap.toml
-chmod 600 /etc/grafana/ldap.toml
-
