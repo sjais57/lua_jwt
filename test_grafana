@@ -1,94 +1,46 @@
 [[servers]]
-# Active Directory Connection Settings
-host = "your-ad-server.example.com"  # Replace with your AD server
-port = 389                          # Standard LDAP port (use 636 for LDAPS)
-use_ssl = false                     # Set to true for LDAPS (port 636)
-start_tls = true                    # Recommended for security
-ssl_skip_verify = false             # Set true only for self-signed certs
-
-# Service Account (Bind DN) - Must have read access to AD
-bind_dn = "CN=grafana-service,OU=Service Accounts,DC=example,DC=com"
-bind_password = "your-strong-password"
-
-# User Search Configuration
-search_base_dns = ["DC=example,DC=com"]  # Base DN where users are stored
-search_filter = "(sAMAccountName=%s)"    # Standard AD username filter
-
-# Attribute Mapping (AD → Grafana)
-[servers.attributes]
-name = "givenName"        # First name
-surname = "sn"           # Last name
-username = "sAMAccountName"  # AD username (e.g., jsmith)
-member_of = "memberOf"   # AD group membership attribute
-email = "mail"           # Email attribute in AD
-
-# Group Mappings (AD Groups → Grafana Roles)
-[[servers.group_mappings]]
-group_dn = "CN=Grafana-Admins,OU=Groups,DC=example,DC=com"
-org_role = "Admin"       # Full access (manage dashboards, users, etc.)
-
-[[servers.group_mappings]]
-group_dn = "CN=Grafana-Editors,OU=Groups,DC=example,DC=com"
-org_role = "Editor"      # Can edit dashboards but not admin rights
-
-[[servers.group_mappings]]
-group_dn = "CN=Grafana-Viewers,OU=Groups,DC=example,DC=com"
-org_role = "Viewer"      # Read-only access
-
-# Fallback role (if user is authenticated but not in any mapped group)
-[[servers.group_mappings]]
-group_dn = "*"           # Wildcard for all other users
-org_role = "Viewer"      # Default role (adjust as needed)
-
-
-
-
-====================
-Validate LDAP Connection
-
-ldapsearch -x -H ldap://your-ad-server.example.com -D "CN=grafana-service,OU=Service Accounts,DC=example,DC=com" -W -b "DC=example,DC=com" "(sAMAccountName=testuser)"
-
-
-Sync Users Manually
-grafana-cli admin ldap-sync --help
-grafana-cli admin ldap-sync
-
-
-
-=======================
-[[servers]]
-# Active Directory server connection
-host = "your-ad-server.example.com"
+# Your AD LDAP server
+host = "ad.yourdomain.com"
 port = 389
 use_ssl = false
-start_tls = true  # Recommended for security with AD
-ssl_skip_verify = false  # Set to true only for self-signed certificates
+start_tls = true
 
-# Service account for binding (read-only access recommended)
-bind_dn = "CN=grafana-service,OU=Service Accounts,DC=example,DC=com"
-bind_password = "your_service_account_password"
+# Service account used to bind to AD
+bind_dn = "CN=ldap-reader,OU=ServiceAccounts,DC=yourdomain,DC=com"
+bind_password = "your_password"
 
-# User search configuration
-search_base_dns = ["DC=example,DC=com"]
-search_filter = "(&(objectCategory=person)(objectClass=user)(sAMAccountName=%s)(memberOf=CN=Grafana-Users,OU=Groups,DC=example,DC=com))"
+# Base where users are located
+search_base_dns = ["OU=Users,DC=yourdomain,DC=com"]
 
-# Attribute mapping
+# Match login user by sAMAccountName
+search_filter = "(sAMAccountName=%s)"
+
 [servers.attributes]
 name = "givenName"
 surname = "sn"
-username = "sAMAccountName"  # Standard AD username attribute
-member_of = "memberOf"
-email = "mail"
+username = "sAMAccountName"
+email =  "mail"
 
-# Group to role mapping
-[[servers.group_mappings]]
-group_dn = "CN=Grafana-Admins,OU=Groups,DC=example,DC=com"
-org_role = "Admin"
+# Group search base
+group_search_base_dns = ["OU=Groups,DC=yourdomain,DC=com"]
+group_search_filter = "(&(objectClass=group)(member=%s))"
+group_search_filter_user_attribute = "distinguishedName"
 
+# Only users in 'unixtest' AD group can log in
 [[servers.group_mappings]]
-group_dn = "CN=Grafana-Editors,OU=Groups,DC=example,DC=com"
+group_dn = "CN=unixtest,OU=Groups,DC=yourdomain,DC=com"
 org_role = "Editor"
+grafana_admin = false
 
+# Optional fallback (or omit to deny all others)
 [[servers.group_mappings]]
-group_dn = "*"  # Default role for all authenticated users
+group_dn = "*"
 org_role = "Viewer"
+
+
+
+===
+ldapsearch -x -H ldap://ad.yourdomain.com \
+  -D "CN=ldap-reader,OU=ServiceAccounts,DC=yourdomain,DC=com" -W \
+  -b "OU=Groups,DC=yourdomain,DC=com" \
+  "(&(objectClass=group)(cn=unixtest))"
