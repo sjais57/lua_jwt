@@ -1,30 +1,18 @@
 [[servers]]
-host = "your.ad.server.com"
+host = "ad.example.com"
 port = 389
 use_ssl = false
-start_tls = true
-
-# Use a read-only service account that can search users/groups
-bind_dn = "cn=ldap-reader,ou=ServiceAccounts,dc=example,dc=com"
-bind_password = "yourPassword"  # or inject via Vault
-
+bind_dn = "CN=ldap-user,OU=Service Accounts,DC=example,DC=com"
+bind_password = "your_password"
 search_filter = "(sAMAccountName=%s)"
-search_base_dns = ["ou=Employees,dc=example,dc=com"]
+search_base_dns = ["DC=example,DC=com"]
 
-# Group search configuration
-group_search_filter = "(&(objectClass=group)(member=%s))"
-group_search_base_dns = ["dc=example,dc=com"]
-group_search_filter_user_attribute = "dn"
+[servers.attributes]
+name = "givenName"
+surname = "sn"
+username = "sAMAccountName"
+email = "mail"
 
-# Allow all users who belong to specific AD groups
 [[servers.group_mappings]]
-group_dn = "cn=grafana-admins,ou=Groups,dc=example,dc=com"
+group_dn = "*"
 org_role = "Admin"
-
-[[servers.group_mappings]]
-group_dn = "cn=grafana-editors,ou=Groups,dc=example,dc=com"
-org_role = "Editor"
-
-[[servers.group_mappings]]
-group_dn = "cn=grafana-viewers,ou=Groups,dc=example,dc=com"
-org_role = "Viewer"
