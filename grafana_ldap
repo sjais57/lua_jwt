@@ -16,3 +16,6 @@ email = "mail"
 [[servers.group_mappings]]
 group_dn = "*"
 org_role = "Admin"
+
+
+ldapsearch -x -H ldaps://your-ldap-server:636 -D "cn=admin,dc=example,dc=com" -W -b "dc=example,dc=com" "(objectClass=*)"
