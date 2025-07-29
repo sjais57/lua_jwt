@@ -44,3 +44,9 @@ ldapsearch -x -H ldap://ad.yourdomain.com \
   -D "CN=ldap-reader,OU=ServiceAccounts,DC=yourdomain,DC=com" -W \
   -b "OU=Groups,DC=yourdomain,DC=com" \
   "(&(objectClass=group)(cn=unixtest))"
+
+
+ldapsearch -x -H ldap://ad.corp.yourdomain.com \
+  -D "CN=ldap-reader,OU=ServiceAccounts,DC=corp,DC=yourdomain,DC=com" -W \
+  -b "OU=BAND,DC=corp,DC=yourdomain,DC=com" \
+  "(sAMAccountName=john.doe)" dn
