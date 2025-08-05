@@ -123,4 +123,3 @@ def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH',
             os.unlink(opa_policy_path)
 
 
-
