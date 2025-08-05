@@ -1,0 +1,30 @@
+import yaml
+from group_category import get_user_category
+
+# ---- HARD CODED VALUES FOR TESTING ----
+
+# Path to your api_key.yaml (update as needed)
+API_KEY_YAML_PATH = "api.yaml"
+
+# Simulate a user who is in these groups (change to test!)
+user_groups = ["grp_tier1", "unix"]
+
+# ---------------------------------------
+
+# 1. Load the YAML
+with open(API_KEY_YAML_PATH, "r") as f:
+    data = yaml.safe_load(f)
+
+metadata = data.get("metadata", {})
+# Also pass embedded OPA policy if present
+if "opa_policy" in data:
+    metadata["opa_policy"] = data["opa_policy"]
+
+# 2. Evaluate the user's category using OPA
+result = get_user_category(user_groups, lookup_mode="TIERED_MATCH", metadata=metadata)
+
+# 3. Print the output
+print("Input user_groups:", user_groups)
+print("OPA Evaluation Result:")
+import json
+print(json.dumps(result, indent=2))
