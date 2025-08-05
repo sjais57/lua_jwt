@@ -1,4 +1,43 @@
-group_Category.py:
+metadata:
+  categories:
+    gold:
+      groups: [grp_tier1, powerusers]
+      tier: 3
+      destURL: debug/request-info?user_category=gold
+    silver:
+      groups: [grp_tier2, contributors]
+      tier: 2
+      destURL: debug/request-info?user_category=silver
+opa_policy: |
+  package dspai.policy
+
+  default matched_category = null
+
+  matches[c] {
+      some name
+      cat := input.metadata.categories[name]
+      some g
+      g := input.user_groups[_]
+      g == cat.groups[_]
+      c := {
+          "name": name,
+          "tier": cat.tier,
+          "destURL": cat.destURL
+      }
+  }
+
+  matched_category = best {
+      cats := [c | c := matches[_]]
+      count(cats) > 0
+      best := max(cats, compare)
+  }
+
+  compare(a, b) = r {
+      r := a.tier > b.tier
+  }
+
+
+=================================================================
 
 import logging
 from typing import List, Dict, Any
@@ -10,27 +49,35 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-OPA_POLICY_PATH = os.environ.get(
-    "OPA_POLICY_PATH",
-    "policies/clients/group_category.rego"  # Update as needed
-)
-
 def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH', **kwargs) -> Dict[str, Any]:
     """
-    Assign user to a category by calling OPA (Open Policy Agent) with group membership and metadata.
-
+    Assign user to a category using OPA with policy code from metadata (if present).
     Args:
-        user_groups: List of groups the user belongs to
+        user_groups: List of user's groups
         lookup_mode: Only 'TIERED_MATCH' supported for OPA use
-        metadata: (kwarg) metadata dictionary containing 'categories'
+        metadata: (kwarg) metadata dict with 'categories' and optionally 'opa_policy'
     Returns:
-        Dict with category assignment result (for JWT claims)
+        Dict with category assignment result
     """
     metadata = kwargs.get('metadata', {})
     opa_input = {
         "user_groups": user_groups,
         "metadata": metadata
     }
+
+    # OPA policy: from metadata['opa_policy'] if present, else fallback to file
+    opa_policy_code = metadata.get("opa_policy")
+    if opa_policy_code:
+        # Write OPA policy code to a temp file
+        with tempfile.NamedTemporaryFile("w+", suffix=".rego", delete=False) as pf:
+            pf.write(opa_policy_code)
+            pf.flush()
+            opa_policy_path = pf.name
+    else:
+        opa_policy_path = os.environ.get(
+            "OPA_POLICY_PATH",
+            "policies/clients/group_category.rego"
+        )
 
     # Write input to a temporary file
     with tempfile.NamedTemporaryFile("w+", suffix=".json", delete=False) as tf:
@@ -39,10 +86,9 @@ def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH',
         input_path = tf.name
 
     try:
-        # Call OPA CLI with policy file and input
         cmd = [
             "opa", "eval",
-            "--data", OPA_POLICY_PATH,
+            "--data", opa_policy_path,
             "--input", input_path,
             "--format", "json",
             "data.dspai.policy"
@@ -73,34 +119,8 @@ def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH',
     finally:
         if os.path.exists(input_path):
             os.unlink(input_path)
+        if opa_policy_code and os.path.exists(opa_policy_path):
+            os.unlink(opa_policy_path)
 
 
 
-
-group_category.rego:
-package dspai.policy
-
-default matched_category = null
-
-matches[c] {
-    some name
-    cat := input.metadata.categories[name]
-    some g
-    g := input.user_groups[_]
-    g == cat.groups[_]
-    c := {
-        "name": name,
-        "tier": cat.tier,
-        "destURL": cat.destURL
-    }
-}
-
-matched_category = best {
-    cats := [c | c := matches[_]]
-    count(cats) > 0
-    best := max(cats, compare)
-}
-
-compare(a, b) = r {
-    r := a.tier > b.tier
-}
