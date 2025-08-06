@@ -1,3 +1,53 @@
+metadata:
+  categories:
+    gold:
+      groups: [grp_tier1, powerusers]
+      tier: 3
+      destURL: debug/request-info?user_category=gold
+    silver:
+      groups: [grp_tier2, contributors]
+      tier: 2
+      destURL: debug/request-info?user_category=silver
+opa_policy: |
+  package dspai.policy
+
+  default matched_category = null
+
+  matches[c] {
+      some name
+      cat := input.metadata.categories[name]
+      some g
+      g := input.user_groups[_]
+      g == cat.groups[_]
+      c := {
+          "name": name,
+          "tier": cat.tier,
+          "destURL": cat.destURL
+      }
+  }
+
+  matched_category = best {
+      cats := [c | c := matches[_]]
+      count(cats) > 0
+      best := max(cats, compare)
+  }
+
+  compare(a, b) = r {
+      r := a.tier > b.tier
+  }
+
+
+
+
+
+
+
+
+
+
+
+
+
 import yaml
 from group_category import get_user_category
 
