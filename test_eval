@@ -1,3 +1,21 @@
+import yaml
+from group_category import get_user_category
+import json
+
+API_KEY_YAML_PATH = "api.yaml"
+user_groups = ["grp_tier1", "unix"]
+
+with open(API_KEY_YAML_PATH, "r") as f:
+    data = yaml.safe_load(f)
+
+metadata = data.get("metadata", {})
+if "opa_policy" in data:
+    metadata["opa_policy"] = data["opa_policy"]
+
+result = get_user_category(user_groups, lookup_mode="TIERED_MATCH", metadata=metadata)
+print(json.dumps(result, indent=2))
+
+
 metadata:
   categories:
     gold:
