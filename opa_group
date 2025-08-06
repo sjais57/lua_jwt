@@ -1,71 +1,106 @@
+import logging
+from typing import List, Dict, Any
+import subprocess
+import json
 import os
 import uuid
-import json
 
-def get_user_category(user_groups, lookup_mode='TIERED_MATCH', **kwargs):
-    import logging
-    import subprocess
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    logger = logging.getLogger(__name__)
+def get_user_category(user_groups: List[str], lookup_mode: str = 'FIRST_MATCH', **kwargs) -> Dict[str, Any]:
+    """
+    Assign user to a category using OPA policy if present, else fallback to classic Python matching.
+    Args:
+        user_groups: List of user's groups
+        lookup_mode: 'FIRST_MATCH', 'ALL_MATCHES', or 'TIERED_MATCH'
+        metadata: (kwarg) metadata dict with 'categories' and optionally 'opa_policy'
+    Returns:
+        Dict with category assignment result
+    """
     metadata = kwargs.get('metadata', {})
     opa_policy_code = metadata.get("opa_policy")
-    if not opa_policy_code:
-        raise ValueError("No 'opa_policy' field in metadata. This function requires a policy in every YAML!")
 
-    opa_input = {
-        "user_groups": user_groups,
-        "metadata": metadata
-    }
+    # -- If OPA policy is present, use OPA with /tmp temp files
+    if opa_policy_code:
+        unique_id = str(uuid.uuid4())
+        opa_policy_path = f"/tmp/opa_policy_{unique_id}.rego"
+        input_path = f"/tmp/opa_input_{unique_id}.json"
+        opa_input = {
+            "user_groups": user_groups,
+            "metadata": metadata
+        }
+        try:
+            # Write policy to /tmp
+            with open(opa_policy_path, "w") as pf:
+                pf.write(opa_policy_code)
+            # Write input to /tmp
+            with open(input_path, "w") as tf:
+                json.dump(opa_input, tf)
 
-    # Write files to /tmp
-    unique_id = str(uuid.uuid4())
-    opa_policy_path = f"/tmp/{unique_id}_policy.rego"
-    input_path = f"/tmp/{unique_id}_input.json"
+            cmd = [
+                "opa", "eval",
+                "--data", opa_policy_path,
+                "--input", input_path,
+                "--format", "json",
+                "data.dspai.policy"
+            ]
+            logger.info(f"Calling OPA: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"OPA evaluation failed: {result.stderr}")
+                return {"category": None, "match_mode": lookup_mode, "reason": f"OPA error: {result.stderr}"}
+            opa_result = json.loads(result.stdout)
+            # Extract matched_category from OPA output
+            matched_category = None
+            if "result" in opa_result and len(opa_result["result"]) > 0:
+                expressions = opa_result["result"][0].get("expressions", [])
+                for expr in expressions:
+                    value = expr.get("value", {})
+                    if isinstance(value, dict) and "matched_category" in value:
+                        matched_category = value["matched_category"]
+            if matched_category:
+                return {"category": matched_category, "match_mode": lookup_mode}
+            else:
+                return {"category": None, "match_mode": lookup_mode, "reason": "No match (OPA)"}
+        except Exception as e:
+            logger.error(f"OPA evaluation failed: {e}")
+            return {"category": None, "match_mode": lookup_mode, "reason": f"Exception: {e}"}
+        finally:
+            # Cleanup
+            for path in (opa_policy_path, input_path):
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
 
-    try:
-        # Write policy
-        with open(opa_policy_path, "w") as pf:
-            pf.write(opa_policy_code)
-        # Write input
-        with open(input_path, "w") as tf:
-            json.dump(opa_input, tf)
-            tf.flush()
+    # -- Classic Python logic as fallback (your existing code) --
+    logger.info(f"Assigning user category for groups: {user_groups} with mode: {lookup_mode}")
+    categories = metadata.get('categories', {})
+    if not categories:
+        logger.warning("No categories found in metadata")
+        return {"categories": [], "match_mode": lookup_mode, "reason": "No categories in metadata"}
 
-        cmd = [
-            "opa", "eval",
-            "--data", opa_policy_path,
-            "--input", input_path,
-            "--format", "json",
-            "data.dspai.policy"
-        ]
-        logger.info(f"Calling OPA: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"OPA evaluation failed: {result.stderr}")
-            return {"category": None, "match_mode": lookup_mode, "reason": f"OPA error: {result.stderr}"}
-        opa_result = json.loads(result.stdout)
+    matches = []
+    for cat_name, cat_data in categories.items():
+        cat_groups = cat_data.get('groups', [])
+        if any(g in user_groups for g in cat_groups):
+            matches.append({"name": cat_name, **cat_data})
 
-        # Extract matched_category from OPA output
-        matched_category = None
-        if "result" in opa_result and len(opa_result["result"]) > 0:
-            expressions = opa_result["result"][0].get("expressions", [])
-            for expr in expressions:
-                value = expr.get("value", {})
-                if isinstance(value, dict) and "matched_category" in value:
-                    matched_category = value["matched_category"]
-
-        if matched_category:
-            return {"category": matched_category, "match_mode": lookup_mode}
+    if lookup_mode == 'FIRST_MATCH':
+        if matches:
+            return {"category": matches[0], "match_mode": lookup_mode}
         else:
-            return {"category": None, "match_mode": lookup_mode, "reason": "No match (OPA)"}
-    except Exception as e:
-        logger.error(f"OPA evaluation failed: {e}")
-        return {"category": None, "match_mode": lookup_mode, "reason": f"Exception: {e}"}
-    finally:
-        # Delete files
-        for path in [input_path, opa_policy_path]:
-            try:
-                if os.path.exists(path):
-                    os.unlink(path)
-            except Exception:
-                pass
+            return {"category": None, "match_mode": lookup_mode, "reason": "No match"}
+    elif lookup_mode == 'ALL_MATCHES':
+        return {"categories": matches, "match_mode": lookup_mode}
+    elif lookup_mode == 'TIERED_MATCH':
+        if matches:
+            best = max(matches, key=lambda x: x.get('tier', 0))
+            return {"category": best, "match_mode": lookup_mode}
+        else:
+            return {"category": None, "match_mode": lookup_mode, "reason": "No match"}
+    else:
+        logger.warning(f"Unknown lookup_mode: {lookup_mode}")
+        return {"categories": matches, "match_mode": lookup_mode, "reason": "Unknown lookup_mode"}
