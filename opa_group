@@ -1,0 +1,31 @@
+import logging
+from typing import List, Dict, Any
+from opa import OpaEval
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH', **kwargs) -> Dict[str, Any]:
+    metadata = kwargs.get('metadata', {})
+    opa_policy_code = metadata.get("opa_policy")
+    if not opa_policy_code:
+        raise ValueError("No 'opa_policy' field in metadata. This function requires a policy in every YAML!")
+
+    opa_input = {
+        "user_groups": user_groups,
+        "metadata": metadata
+    }
+
+    # Evaluate OPA policy in memory!
+    try:
+        evaluator = OpaEval()
+        evaluator.add_policy(opa_policy_code, "policy.rego")
+        result = evaluator.eval("data.dspai.policy.matched_category", opa_input)
+        matched_category = result.get('result')
+        if matched_category:
+            return {"category": matched_category, "match_mode": lookup_mode}
+        else:
+            return {"category": None, "match_mode": lookup_mode, "reason": "No match (OPA)"}
+    except Exception as e:
+        logger.error(f"OPA evaluation failed: {e}")
+        return {"category": None, "match_mode": lookup_mode, "reason": f"Exception: {e}"}
