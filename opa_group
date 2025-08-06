@@ -1,11 +1,12 @@
-import logging
-from typing import List, Dict, Any
-from opa import OpaEval
+import os
+import uuid
+import json
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def get_user_category(user_groups, lookup_mode='TIERED_MATCH', **kwargs):
+    import logging
+    import subprocess
 
-def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH', **kwargs) -> Dict[str, Any]:
+    logger = logging.getLogger(__name__)
     metadata = kwargs.get('metadata', {})
     opa_policy_code = metadata.get("opa_policy")
     if not opa_policy_code:
@@ -16,12 +17,43 @@ def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH',
         "metadata": metadata
     }
 
-    # Evaluate OPA policy in memory!
+    # Write files to /tmp
+    unique_id = str(uuid.uuid4())
+    opa_policy_path = f"/tmp/{unique_id}_policy.rego"
+    input_path = f"/tmp/{unique_id}_input.json"
+
     try:
-        evaluator = OpaEval()
-        evaluator.add_policy(opa_policy_code, "policy.rego")
-        result = evaluator.eval("data.dspai.policy.matched_category", opa_input)
-        matched_category = result.get('result')
+        # Write policy
+        with open(opa_policy_path, "w") as pf:
+            pf.write(opa_policy_code)
+        # Write input
+        with open(input_path, "w") as tf:
+            json.dump(opa_input, tf)
+            tf.flush()
+
+        cmd = [
+            "opa", "eval",
+            "--data", opa_policy_path,
+            "--input", input_path,
+            "--format", "json",
+            "data.dspai.policy"
+        ]
+        logger.info(f"Calling OPA: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"OPA evaluation failed: {result.stderr}")
+            return {"category": None, "match_mode": lookup_mode, "reason": f"OPA error: {result.stderr}"}
+        opa_result = json.loads(result.stdout)
+
+        # Extract matched_category from OPA output
+        matched_category = None
+        if "result" in opa_result and len(opa_result["result"]) > 0:
+            expressions = opa_result["result"][0].get("expressions", [])
+            for expr in expressions:
+                value = expr.get("value", {})
+                if isinstance(value, dict) and "matched_category" in value:
+                    matched_category = value["matched_category"]
+
         if matched_category:
             return {"category": matched_category, "match_mode": lookup_mode}
         else:
@@ -29,3 +61,11 @@ def get_user_category(user_groups: List[str], lookup_mode: str = 'TIERED_MATCH',
     except Exception as e:
         logger.error(f"OPA evaluation failed: {e}")
         return {"category": None, "match_mode": lookup_mode, "reason": f"Exception: {e}"}
+    finally:
+        # Delete files
+        for path in [input_path, opa_policy_path]:
+            try:
+                if os.path.exists(path):
+                    os.unlink(path)
+            except Exception:
+                pass
