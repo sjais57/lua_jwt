@@ -38,51 +38,17 @@ metadata:
 
 
 ====================================
-package api.metadata_filter
-
-default filtered_classifications = []
-
-# Main rule to get classifications for user's groups
-filtered_classifications[classification] {
-    # Get all team entries that match any of the user's groups
-    some team_name
-    team_data := input.metadata.metadata_filter[team_name]
-    group_matches(team_data.groups, input.api_key.ad_groups)
-    classification := team_data.classification[_]
-}
-
-# Helper function to check group matches
-group_matches(team_groups, user_groups) {
-    some i
-    team_groups[i] == user_groups[_]
-}
-
-===================================
-
-# api.yaml
-policies:
-  metadata_filter:
-    # OPA policy defined in YAML (uses same logic as Rego but different syntax)
-    allow:
-      - input:
-          api_key:
-            ad_groups: 
-              - "{{ .groups }}"
-          metadata:
-            metadata_filter: 
-              "{{ .team }}":
-                groups: 
-                  - "{{ .team_groups }}"
-                classification: "{{ .classifications }}"
-
-# Rest of your existing YAML config
-claims: 
-  # ... (original content)
-metadata:
-  metadata_filter:
-    team1:
-      groups: ["grp_tier1", "unix"]
-      classification: ["confidential", "proprietary"]
-    team2:
-      groups: ["grp_tier2", "contributors"]
-      classification: ["confidential"]
+opa eval -I \
+  -d api.yaml \
+  -d <(awk '
+    BEGIN{block=0; indent=-1}
+    /^[[:space:]]*policy_rego:[[:space:]]*\|[[:space:]]*$/ { block=1; indent=match($0,/[^ ]/)-1; next }
+    block {
+      this = match($0,/[^ ]/)-1
+      if (this < indent + 2 && $0 !~ /^[[:space:]]*$/) exit
+      sub(sprintf("^ {%d}", indent+2), "")
+      print
+    }
+  ' api.yaml) \
+  -i <(printf %s '{"user":{"name":"alice","groups":["grp_tier1","unix"]}}') \
+  'data.apikey.metadata_filter' -f pretty
