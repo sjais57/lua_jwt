@@ -1,0 +1,166 @@
+import json
+import requests
+
+# Configuration - replace with your actual values
+URL = "https://your-api-endpoint.com/auth"
+USERNAME = "your_username"
+PASSWORD = "your_password"
+API_KEY = "your_api_key"
+
+# Prepare the request
+payload = json.dumps({
+    "username": USERNAME,
+    "password": PASSWORD,
+    "api_key": API_KEY
+})
+
+headers = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+}
+
+print("Attempting to authenticate with the API...")
+try:
+    # Make the request
+    response = requests.post(URL, data=payload, headers=headers)
+    response.raise_for_status()  # Raises exception for 4XX/5XX errors
+    
+    # Parse the response
+    data = response.json()
+    
+    # Extract and print the access token
+    if 'access_token' in data:
+        print("\nAuthentication successful!")
+        print(f"Access Token: {data['access_token']}")
+        
+        # If you need the refresh token too
+        if 'refresh_token' in data:
+            print(f"Refresh Token: {data['refresh_token']}")
+    else:
+        print("\nResponse received but no access token found:")
+        print(json.dumps(data, indent=2))
+
+except requests.exceptions.RequestException as e:
+    print(f"\nError making API request: {str(e)}")
+    if hasattr(e, 'response') and e.response:
+        print(f"Status Code: {e.response.status_code}")
+        print(f"Response: {e.response.text}")
+
+except json.JSONDecodeError:
+    print("\nError: Failed to parse JSON response")
+    print(f"Raw response: {response.text}")
+
+except Exception as e:
+    print(f"\nAn unexpected error occurred: {str(e)}")
+
+=================
+
+import json
+import requests
+import streamlit as st
+
+def get_auth_token(url, username, password, api_key):
+    """
+    Function to authenticate and get access token
+    """
+    payload = json.dumps({
+        "username": username,
+        "password": password,
+        "api_key": api_key
+    })
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(url, data=payload, headers=headers)
+        response.raise_for_status()  # Raises exception for 4XX/5XX errors
+        data = response.json()  # Parse JSON response
+        return data.get('access_token')  # Return just the access token
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error making API request: {e}")
+        return None
+    except json.JSONDecodeError:
+        st.error("Error parsing JSON response")
+        return None
+
+# Streamlit application
+def main():
+    st.title("API Authentication")
+    
+    # Input fields
+    url = st.text_input("API URL", "https://your-api-endpoint.com/auth")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    api_key = st.text_input("API Key", type="password")
+    
+    if st.button("Get Access Token"):
+        if not all([url, username, password, api_key]):
+            st.warning("Please fill all fields")
+            return
+            
+        with st.spinner("Authenticating..."):
+            token = get_auth_token(url, username, password, api_key)
+            
+        if token:
+            st.success("Authentication successful!")
+            st.text_area("Access Token", token, height=100)
+            
+            # Store token in session state for later use
+            st.session_state['access_token'] = token
+        else:
+            st.error("Failed to get access token")
+
+if __name__ == "__main__":
+    main()
+
+
+=================================
+
+import json
+import requests
+
+def get_access_token(url, username, password, api_key):
+    payload = json.dumps({
+        "username": username,
+        "password": password,
+        "api_key": api_key
+    })
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        response = requests.post(url, data=payload, headers=headers)
+        response.raise_for_status()  # raise error for bad HTTP status
+
+        data = response.json()  # parse JSON directly
+        print("API Response:", data)  # Debug log
+
+        access_token = data.get("access_token")
+        if not access_token:
+            print("'access_token' not found in response.")
+            return None
+        return access_token
+
+    except requests.exceptions.RequestException as e:
+        print(f"Request failed: {e}")
+        return None
+
+
+    url = "https://example.com/api"
+username = "user"
+password = "password"
+api_key = "api.yaml"
+
+token = get_access_token(url, username, password, api_key)
+if token:
+    print(f"Access Token: {token}")
+
+
+
+    
