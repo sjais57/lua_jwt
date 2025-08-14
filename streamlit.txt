@@ -15,16 +15,20 @@ def get_access_token(url, username, password, api_key):
 
     try:
         response = requests.post(url, data=payload, headers=headers, verify=False)
-        response.raise_for_status()  # raise error for bad HTTP status
 
-        data = response.json()  # parse JSON directly
-        print("API Response:", data)  # Debug log
-
-        access_token = data.get("access_token")
-        if not access_token:
-            print("'access_token' not found in response.")
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            print("Error: Failed to parse JSON response")
+            print("Raw response:", response.text)
             return None
-        return access_token
+
+        if response.status_code == 200 and "access_token" in data:
+            return data["access_token"]
+        else:
+            print(f"Authentication failed: {response.status_code}")
+            print(json.dumps(data, indent=2))
+            return None
 
     except requests.exceptions.RequestException as e:
         print(f"Request failed: {e}")
